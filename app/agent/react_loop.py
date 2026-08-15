@@ -19,6 +19,7 @@
     - 模型发起工具调用：追加一条 role=assistant 且带 tool_calls 的消息；
     - 工具执行结果：追加一条或多条 role=tool 的消息（带 tool_call_id 关联）。
 """
+import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
@@ -125,7 +126,31 @@ async def run_react_loop(
 
         for tc in response.tool_calls:
             all_tool_calls.append(tc)
-            envelope: ToolResult = await execute_tool(tc.name, tc.arguments)
+            try:
+                envelope: ToolResult = await execute_tool(tc.name, tc.arguments)
+            except asyncio.CancelledError:
+                # 客户端断开/取消：补一条 tool 失败消息，保证 assistant(tool_calls)
+                # 与 tool 消息配对完整（否则下次请求网关报 "No tool output found"）
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "name": tc.name,
+                        "content": ToolResult.fail(
+                            tc.name, AgentError("执行被取消（客户端断开）", code="CANCELLED")
+                        ).to_json(),
+                    }
+                )
+                if hooks and hooks.after_tool:
+                    # 用占位信封触发钩子（持久化这一条，保持序列一致）
+                    await hooks.after_tool(
+                        tc,
+                        ToolResult.fail(
+                            tc.name, AgentError("执行被取消（客户端断开）", code="CANCELLED")
+                        ),
+                        steps,
+                    )
+                raise
             # 工具结果以统一信封（JSON 字符串）重新进入 Messages —— 循环得以继续的关键
             messages.append(
                 {

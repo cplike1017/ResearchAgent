@@ -130,9 +130,13 @@ class AgentRuntime:
     async def _prepare_messages(self, message: str, session_id: str) -> list[dict]:
         messages: list[dict] = []
         if self.session_repo is not None:
-            messages = self.session_repo.list_messages(session_id)
-        # 已持久化条数 = 加载的历史条数（后续追加的用户消息从这里开始写库）
-        self._persisted = len(messages)
+            raw = self.session_repo.list_messages(session_id)
+            # 库中原有条数（持久化计数基准：修复会增删消息，但库里还是原始条数）
+            self._persisted = len(raw)
+            # 防御：修复历史中不完整的 tool 配对 / 连续 user（如之前中断残留）
+            messages = _repair_tool_pairing(raw)
+        else:
+            self._persisted = 0
         messages.append({"role": "user", "content": message})
         return messages
 
@@ -140,12 +144,20 @@ class AgentRuntime:
     # 持久化 + 检查点
     # ------------------------------------------------------------------
     def _persist_and_checkpoint(self, state: AgentState, messages: list[dict], point: str) -> None:
-        """把新消息写入 Session 并保存 Checkpoint（point 是保存原因标记）。"""
+        """把新消息写入 Session 并保存 Checkpoint（point 是保存原因标记）。
+
+        防御：只持久化"tool 配对完整"的消息段——若 assistant(tool_calls) 声明了
+        N 个调用但 tool 结果不足 N 条（如执行被取消中断），跳过持久化，
+        避免把不完整序列写入历史（否则下次请求网关报 "No tool output found"）。
+        """
         if self.session_repo is not None:
             new_messages = messages[self._persisted:]
-            for m in new_messages:
+            # 校验 tool 配对：从末尾回溯，找到最后一个不完整块并截断
+            safe_new = _truncate_incomplete_tool_block(new_messages)
+            for m in safe_new:
                 self.session_repo.add_message(state.session_id, m)
-            self._persisted = len(messages)
+            # 只推进到安全位置（未持久化的留在内存，等待补全）
+            self._persisted = self._persisted + len(safe_new)
             self.session_repo.touch(state.session_id)
         if self.checkpoint_repo is not None:
             state.messages = messages
@@ -538,3 +550,94 @@ def _last_user_text(messages: list[dict]) -> str:
             content = msg.get("content") or ""
             return content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
     return ""
+
+
+def _truncate_incomplete_tool_block(messages: list[dict]) -> list[dict]:
+    """截断不完整的 tool 配对块（防御持久化污染）。
+
+    规则：从末尾向前找最近的 assistant(tool_calls) 消息，
+    若其后跟随的 tool 消息数 < 声明的 tool_calls 数，则截断到该
+    assistant 之前（不持久化不完整块）。返回安全可持久化的前缀。
+    """
+    safe = list(messages)
+    # 从后往前扫描
+    for i in range(len(safe) - 1, -1, -1):
+        m = safe[i]
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            declared = len(m.get("tool_calls") or [])
+            # 数其后跟随的 tool 消息
+            tool_count = 0
+            for j in range(i + 1, len(safe)):
+                if safe[j].get("role") == "tool":
+                    tool_count += 1
+                else:
+                    break
+            if tool_count < declared:
+                # 不完整：截断到 assistant 之前
+                return safe[:i]
+            # 完整：保持（可能有更早的不完整块，继续向前检查）
+            continue
+    return safe
+
+
+def _repair_tool_pairing(messages: list[dict]) -> list[dict]:
+    """修复历史中不完整的 tool 配对（防御已污染数据）。
+
+    处理三类非法序列：
+      1. 孤儿 tool 消息：前面没有对应的 assistant(tool_calls) 声明；
+      2. 悬空 assistant(tool_calls)：声明了 N 个调用但 tool 结果不足 N 条；
+      3. 连续 user 消息：OpenAI 网关要求 user/assistant 交替，连续 user 会被拒绝。
+
+    策略：
+      - 对悬空的 assistant(tool_calls)：补充占位 tool 失败消息（配对完整）；
+      - 对连续 user：合并为一条（保留最后一条，避免信息重复且序列合法）；
+      - 对孤儿 tool：保留（网关对多余 tool 消息宽容，但会先修复悬空块）。
+    """
+    repaired: list[dict] = []
+    i = 0
+    n = len(messages)
+    while i < n:
+        m = messages[i]
+        # 连续 user 合并（跳过中间无 assistant 的重复 user）
+        if m.get("role") == "user":
+            # 收集连续 user（跳过前面可能残留的孤立 user 之间的空档）
+            j = i + 1
+            while j < n and messages[j].get("role") == "user":
+                j += 1
+            if j > i + 1:
+                # 合并：只保留最后一条 user（前面的"继续"等重复丢弃）
+                repaired.append(messages[j - 1])
+                i = j
+                continue
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            declared = len(m.get("tool_calls") or [])
+            # 收集后续连续 tool 消息
+            j = i + 1
+            tool_msgs = []
+            while j < n and messages[j].get("role") == "tool":
+                tool_msgs.append(messages[j])
+                j += 1
+            if len(tool_msgs) < declared:
+                # 补充缺失的 tool 占位（失败信封），保证配对完整
+                repaired.append(m)
+                declared_ids = {tc.get("id") for tc in m.get("tool_calls", [])}
+                present_ids = {tm.get("tool_call_id") for tm in tool_msgs}
+                for tc in m.get("tool_calls", []):
+                    if tc.get("id") not in present_ids:
+                        repaired.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc.get("id"),
+                                "name": (tc.get("function") or {}).get("name", "unknown"),
+                                "content": ToolResult.fail(
+                                    (tc.get("function") or {}).get("name", "unknown"),
+                                    AgentError("历史记录不完整：工具结果缺失", code="MISSING_TOOL_OUTPUT"),
+                                ).to_json(),
+                            }
+                        )
+                repaired.extend(tool_msgs)
+                i = j
+                continue
+        repaired.append(m)
+        i += 1
+    return repaired
