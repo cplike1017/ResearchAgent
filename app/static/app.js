@@ -438,10 +438,13 @@ function renderTraceNodeV2(span, depth, totalDur) {
   const dur = span.duration_ms || 0;
   const pct = Math.max((dur / totalDur) * 100, 0.5);
   const hasChildren = span.children && span.children.length;
+  // 详情是否有内容（决定是否可展开）
+  const hasDetails = span.error || span.input !== undefined || span.output !== undefined
+    || (span.attributes && Object.keys(span.attributes).length);
 
   let html = `<div class="trace-node">`;
-  html += `<div class="tn-row ${isErr ? "is-err" : ""}" style="padding-left:${depth * 14}px">`;
-  // 折叠箭头
+  // 行（点击展开详情；caret 折叠子节点）
+  html += `<div class="tn-row ${isErr ? "is-err" : ""} ${hasDetails ? "clickable" : ""}" style="padding-left:${depth * 14}px">`;
   html += hasChildren
     ? `<span class="tn-caret open" data-caret>▾</span>`
     : `<span class="tn-caret-placeholder"></span>`;
@@ -450,12 +453,21 @@ function renderTraceNodeV2(span, depth, totalDur) {
   if (span.attributes && span.attributes.tool_name) {
     html += `<span class="tn-tool">${esc(span.attributes.tool_name)}</span>`;
   }
-  // 耗时条 + 数值
   html += `<span class="tn-bar-wrap"><span class="tn-bar" style="width:${Math.min(pct * 3, 60)}px"></span></span>`;
   html += `<span class="tn-dur">${dur.toFixed(dur >= 100 ? 0 : 1)}ms</span>`;
   html += `<span class="tn-status ${cls}">${isErr ? "❌" : "✓"}</span>`;
+  // 详情展开指示（有详情才显示）
+  html += hasDetails ? `<span class="tn-expand" data-expand>详情 ▾</span>` : "";
   html += `</div>`;
-  // 错误详情
+
+  // 详情面板（点击行展开）
+  if (hasDetails) {
+    html += `<div class="tn-detail" data-detail style="margin-left:${depth * 14 + 30}px">`;
+    html += renderSpanDetail(span);
+    html += `</div>`;
+  }
+
+  // 错误详情（保留在行内，展开面板里也有）
   if (span.error) {
     html += `<div class="tn-err" style="margin-left:${depth * 14 + 30}px">${esc(span.error.type || "Error")}: ${esc((span.error.message || "").slice(0, 150))}</div>`;
   }
@@ -469,7 +481,41 @@ function renderTraceNodeV2(span, depth, totalDur) {
   return html;
 }
 
+function renderSpanDetail(span) {
+  let html = "";
+  // 元信息
+  html += `<div class="tn-detail-meta">`;
+  if (span.span_id) html += `<span class="ts-meta">id: ${esc(span.span_id.slice(-12))}</span>`;
+  if (span.start_time) html += `<span class="ts-meta">start: ${esc(span.start_time.slice(11, 19))}</span>`;
+  if (span.end_time) html += `<span class="ts-meta">end: ${esc(span.end_time.slice(11, 19))}</span>`;
+  if (span.duration_ms != null) html += `<span class="ts-meta">耗时: ${formatMs(span.duration_ms)}</span>`;
+  html += `</div>`;
+
+  // attributes（如 model / tokens / tool_name）
+  if (span.attributes && Object.keys(span.attributes).length) {
+    html += `<div class="ts-section"><div class="ts-label">🏷 属性</div>`;
+    html += `<pre class="ts-code">${esc(JSON.stringify(span.attributes, null, 2))}</pre></div>`;
+  }
+  // input
+  if (span.input !== undefined && span.input !== null) {
+    html += `<div class="ts-section"><div class="ts-label">📥 输入</div>`;
+    html += `<pre class="ts-code">${esc(JSON.stringify(span.input, null, 2).slice(0, 600))}</pre></div>`;
+  }
+  // output
+  if (span.output !== undefined && span.output !== null) {
+    html += `<div class="ts-section"><div class="ts-label">📤 输出</div>`;
+    html += `<pre class="ts-code">${esc(JSON.stringify(span.output, null, 2).slice(0, 600))}</pre></div>`;
+  }
+  // error
+  if (span.error) {
+    html += `<div class="ts-section"><div class="ts-label err-label">⚠️ 错误</div>`;
+    html += `<pre class="ts-code err-code">${esc(JSON.stringify(span.error, null, 2))}</pre></div>`;
+  }
+  return html;
+}
+
 function bindTreeToggles(panel) {
+  // caret：折叠子节点
   panel.querySelectorAll("[data-caret]").forEach((caret) => {
     caret.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -480,6 +526,19 @@ function bindTreeToggles(panel) {
       const open = caret.classList.contains("open");
       caret.classList.toggle("open", !open);
       children.style.display = open ? "none" : "";
+    });
+  });
+  // 行点击：展开/收起详情面板
+  panel.querySelectorAll(".tn-row.clickable").forEach((row) => {
+    row.addEventListener("click", (e) => {
+      if (e.target.closest("[data-caret]")) return; // caret 已处理
+      const detail = row.nextElementSibling && row.nextElementSibling.classList.contains("tn-detail")
+        ? row.nextElementSibling : null;
+      if (!detail) return;
+      const expand = row.querySelector("[data-expand]");
+      const isOpen = detail.classList.contains("open");
+      detail.classList.toggle("open", !isOpen);
+      if (expand) expand.textContent = isOpen ? "详情 ▾" : "详情 ▴";
     });
   });
 }

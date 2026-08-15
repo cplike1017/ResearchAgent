@@ -274,6 +274,46 @@ body {
 .tn-status { font-size: 10px; }
 .tn-status.ok { color: var(--ok); }
 .tn-status.err { color: var(--err); }
+.tn-expand {
+  color: var(--accent);
+  font-size: 10px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.tn-row.clickable { cursor: pointer; }
+.tn-row.clickable:hover { background: rgba(56, 189, 248, 0.06); }
+
+/* Trace 节点详情面板（点击展开） */
+.tn-detail {
+  display: none;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 4px 0 4px 0;
+}
+.tn-detail.open { display: block; }
+.tn-detail-meta { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.tn-detail .ts-section { margin-bottom: 8px; }
+.tn-detail .ts-label { font-size: 10px; color: var(--text-dim); margin-bottom: 3px; }
+.tn-detail .ts-label.err-label { color: var(--err); }
+.tn-detail .ts-code {
+  background: #0b1526;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 8px 10px;
+  font-family: "Consolas", "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 220px;
+  overflow-y: auto;
+  color: var(--text);
+}
+.tn-detail .ts-code.err-code { color: #fca5a5; }
 .tn-err {
   color: var(--err); font-size: 11px;
   padding: 4px 8px;

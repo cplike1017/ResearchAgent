@@ -182,7 +182,10 @@ class TraceRecorder:
                 "status": span.status.value,
                 "error": span.error,
                 "attributes": span.attributes,
+                "input": span.input,
+                "output": span.output,
                 "start_time": span.start_time,
+                "end_time": span.end_time,
                 "children": children,
             }
 
