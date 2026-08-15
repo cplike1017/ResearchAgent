@@ -130,38 +130,14 @@ app = create_app()
 async def _quiet_mcp_close(mcp_client) -> None:
     """静默关闭 MCP 连接。
 
-    MCP SDK 的 stdio_client（1.x）在非创建 task 中关闭时会抛
-    BaseExceptionGroup / "cancel scope in a different task"（Windows +
-    asyncio 下的 SDK 缺陷，不影响功能）。这里：
-      1. 捕获 BaseExceptionGroup（此前 except Exception 捕获不到）；
-      2. 临时设置 asyncio exception handler 抑制 "Task exception was
-         never retrieved" 类噪音；
-      3. 子进程残留由进程退出时 OS 回收。
+    注意：uvicorn lifespan 的 startup/shutdown 在同一 task，MCP SDK 的
+    stdio_client.__aexit__ 可以直接 await 干净关闭。这里仅兜底捕获
+    BaseExceptionGroup（SDK 在异常路径下可能抛出，且不被 except Exception
+    捕获），防止关闭阶段抛错。
     """
-    import io
-    import sys
-
-    loop = asyncio.get_running_loop()
-    old_handler = loop.get_exception_handler()
-
-    def _quiet_handler(loop_, context):
-        # 吞掉 MCP 关闭相关的异常噪音；其余转发给默认处理器
-        msg = str(context.get("message", ""))
-        exc = context.get("exception")
-        if "never retrieved" in msg or (exc and "cancel scope" in str(exc)):
-            return
-        if old_handler:
-            old_handler(loop_, context)
-
-    loop.set_exception_handler(_quiet_handler)
-    old_stderr = sys.stderr
-    sys.stderr = io.StringIO()
     try:
         await mcp_client.close()
     except BaseExceptionGroup:
         pass
     except Exception:
         pass
-    finally:
-        loop.set_exception_handler(old_handler)
-        sys.stderr = old_stderr

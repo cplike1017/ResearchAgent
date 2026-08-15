@@ -90,19 +90,19 @@ class ServerConnection:
         """尽力清理连接资源（忽略 SDK 跨 task 关闭噪音）。
 
         说明：MCP SDK 的 stdio_client 用 anyio task group 管理子进程，
-        __aexit__ 必须在进入时的同一 task 调用；uvicorn lifespan 关闭时
-        跨 task，会抛 BaseExceptionGroup / CancelledError。这里尽量清理，
-        残余噪音（unclosed transport 警告）在进程退出时由 OS 回收。
+        __aexit__ 必须在进入时的同一 task 调用（uvicorn lifespan 的
+        startup/shutdown 在同一 task，直接 await 即可干净关闭）。
+        注意：绝不能包 asyncio.shield —— shield 会创建新 task 执行
+        __aexit__，反而造成跨 task 的 cancel scope 错误！
         """
         if self._session is not None:
             try:
-                await asyncio.shield(self._session.__aexit__(None, None, None))
+                await self._session.__aexit__(None, None, None)
             except (BaseExceptionGroup, Exception, asyncio.CancelledError):
                 pass
         if self._client_ctx is not None:
             try:
-                # 用 asyncio.shield 避免取消传播；捕获 SDK 跨 task 异常
-                await asyncio.shield(self._client_ctx.__aexit__(None, None, None))
+                await self._client_ctx.__aexit__(None, None, None)
             except (BaseExceptionGroup, Exception, asyncio.CancelledError):
                 pass
         self._session = None
