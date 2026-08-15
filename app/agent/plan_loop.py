@@ -15,10 +15,14 @@ Plan Loop（规划执行总控，Stage 9 核心）。
     - react：整任务一次性进入循环，模型自己决定先后；
     - plan：任务先分解，每步一个小循环，步骤状态可追踪、可恢复。
 
-设计原则：
-    - 复用 run_react_loop（不重写执行机制），plan 只是"编排"；
-    - 每步执行是独立的 ReAct 回合，超步数保护仍然生效；
-    - 步骤失败不立即终止（标记 FAILED 继续后续），由 Reflector 决定是否重规划。
+关键设计（修复 OpenAI 协议非法序列）：
+    每步执行使用【完全独立】的 messages（step_messages），与全局历史隔离：
+      - 每步内的 ReAct 循环产生的 assistant(tool_calls) + tool 消息
+        只在 step_messages 内合法交替，绝不写入全局；
+      - 每步结束后，仅把【干净的步骤结果】以纯文本 assistant 消息写回
+        全局 messages（user 提问 → assistant 结果交替），保证全局序列
+        永远满足 OpenAI 协议（无孤儿 tool 消息、无乱序）；
+      - 重规划时基于干净的全局历史重新执行，不会残留非法片段。
 """
 import json
 
@@ -62,7 +66,7 @@ class PlanExecutor:
         执行计划。
 
         :param task: 用户原始任务（用于规划）
-        :param messages: 可变的会话消息（执行过程中逐步追加；最终汇总回答也写回）
+        :param messages: 全局会话消息（仅追加干净的 user/assistant 结果，保持协议合法）
         :param memory_context: Stage 8 记忆层检索到的相关记忆（可空，供规划参考）
         :return: (计划步骤(含结果), 最终回答, 全部工具调用)
         """
@@ -84,14 +88,14 @@ class PlanExecutor:
         all_calls: list[ToolCallRequest] = []
         step_results: list[str] = []
 
-        # 2) 逐步执行
+        # 2) 逐步执行（每步独立 messages）
         total = len(plan)
         for step in plan:
             step.status = "RUNNING"
-            # 每步构造独立消息视图，避免模型看到完整原始任务而越界重复执行：
-            #   system: 步骤指令（含"只做本步，禁止做其他步骤"）
-            #   user:   该步骤的独立子任务描述（不含完整原始任务的其他部分）
-            #   （可选）assistant: 上一步结果摘要，供本步参考
+            # 每步构造【完全独立】的消息视图：
+            #   system: 步骤指令（"只做本步"）
+            #   user:   该步骤的独立子任务描述
+            #   （可选）assistant: 上一步结果摘要（纯文本，协议合法）
             step_messages: list[dict] = []
             if step_results:
                 step_messages.append(
@@ -101,7 +105,7 @@ class PlanExecutor:
             step_messages.append({"role": "user", "content": step.description})
 
             try:
-                step_messages, step_answer, _, step_calls = await run_react_loop(
+                _, step_answer, _, step_calls = await run_react_loop(
                     llm=self.llm,
                     tools_schema=self.registry.schemas(),
                     messages=step_messages,
@@ -116,21 +120,25 @@ class PlanExecutor:
                 step.status = "SUCCEEDED" if success else "FAILED"
                 step.result = step_answer[:120] if step_answer else "无回答"
                 step_results.append(step.result)
-                # 步骤结果写回全局消息（供最终汇总与会话持久化）
-                messages.append(
-                    {"role": "assistant", "content": f"[{step.description}] {step.result}"}
-                )
             except Exception as exc:
                 step.status = "FAILED"
                 step.result = f"{type(exc).__name__}: {str(exc)[:100]}"
                 step_results.append(step.result)
 
-        # 3) 汇总最终回答：把各步结果交给 LLM 组织成完整回答
-        answer = await self._summarize(task, plan, messages)
+            # 每步结束后：仅把【干净的步骤结果】写回全局消息
+            # （user 提问 + assistant 结果交替，保证协议合法、可持久化）
+            # 每步结束后：仅把【干净的步骤结果】写回全局消息
+            # （原始 user 消息已由 runtime 的 _prepare_messages 追加，
+            #  这里只追加 assistant 结果，保证 user/assistant 交替、协议合法）
+            messages.append({"role": "assistant", "content": f"[{step.description}] {step.result}"})
+
+        # 3) 汇总最终回答（独立上下文，不污染全局消息）
+        answer = await self._summarize(task, plan)
+        messages.append({"role": "assistant", "content": answer})
         return plan, answer, all_calls
 
     # ------------------------------------------------------------------
-    async def _summarize(self, task: str, plan: list[PlanStep], messages: list[dict]) -> str:
+    async def _summarize(self, task: str, plan: list[PlanStep]) -> str:
         """把各步结果汇总为最终回答（LLM 组织；失败则拼接各步结果）。"""
         step_lines = "\n".join(
             f"- [{s.status}] {s.description}：{s.result}" for s in plan
@@ -143,16 +151,11 @@ class PlanExecutor:
         try:
             response = await self.llm.chat([{"role": "user", "content": prompt}], tools=None)
             if response.content:
-                # 汇总回答写入消息历史（保持会话完整）
-                messages.append({"role": "assistant", "content": response.content})
                 return response.content
         except Exception:
             pass
         # 降级：拼接各步结果
-        fallback = "；".join(f"{s.description}：{s.result}" for s in plan if s.result)
-        if fallback:
-            messages.append({"role": "assistant", "content": fallback})
-        return fallback
+        return "；".join(f"{s.description}：{s.result}" for s in plan if s.result)
 
 
 def _step_prompt(task: str, step: PlanStep, total: int) -> str:

@@ -333,8 +333,10 @@ class AgentRuntime:
             memory_context = await self.memory.retrieve(task)
 
         while True:
-            # 执行当前计划（或首次规划），传入记忆上下文
-            plan, answer, calls = await executor.execute(current_task, messages, memory_context)
+            # 每次执行使用独立的回合消息快照（基于原始 messages 拷贝），
+            # 重规划时从同一起点重放，避免消息累积导致协议非法
+            turn_messages: list[dict] = list(messages)
+            plan, answer, calls = await executor.execute(current_task, turn_messages, memory_context)
             all_tool_calls.extend(calls)
             final_answer = answer
 
@@ -348,6 +350,9 @@ class AgentRuntime:
             for s in plan:
                 if s.status != "SUCCEEDED":
                     s.status = "SKIPPED"
+
+        # 把最后一次执行产生的消息合并回全局（会话持久化 / result.messages）
+        messages[:] = turn_messages
 
         state.plan = plan
         state.plan_revisions = revisions
