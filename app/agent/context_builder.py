@@ -135,6 +135,9 @@ class ContextBuilder:
 
         # 2) 滑动窗口：只取最近 N 条消息
         recent = session_history[-self.max_messages:]
+        # 防御：窗口起点不能落在"孤儿 tool"上（OpenAI 要求 tool 必须跟在
+        # assistant(tool_calls) 之后；窗口截断可能切掉 tool_calls 声明而留下 tool）
+        recent = _repair_window_boundary(session_history, recent)
 
         # 3) 组装 System Prompt（角色 + 规则 + 工具清单 + 检索内容）
         system_prompt = self._build_system_prompt(tools_schemas, retrieved_docs)
@@ -227,3 +230,52 @@ class ContextBuilder:
         if retrieved_docs:
             lines.append("参考资料：" + " | ".join(retrieved_docs))
         return "\n".join(lines)
+
+
+def _repair_window_boundary(full_history: list[dict], window: list[dict]) -> list[dict]:
+    """修复滑动窗口截断导致的孤儿 tool 消息。
+
+    窗口按条数截取时，可能把 assistant(tool_calls) 切掉而留下紧随的
+    tool 消息（OpenAI 协议要求 tool 必须跟在带 tool_calls 的 assistant 之后）。
+    策略：窗口开头若出现 tool 消息，向前扩展窗口包含其对应的
+    assistant(tool_calls)；若开头是普通消息则保持。同时确保窗口内
+    tool 配对完整（截断末尾的悬空 tool_calls 声明）。
+    """
+    if not window:
+        return window
+
+    # 1) 窗口开头是 tool -> 向前扩展找到其 assistant(tool_calls)
+    start = len(full_history) - len(window)
+    i = start
+    while i < len(full_history) and full_history[i].get("role") == "tool":
+        # 找到最近的 assistant(tool_calls)
+        j = i - 1
+        while j >= 0 and full_history[j].get("role") != "assistant":
+            j -= 1
+        if j >= 0 and full_history[j].get("role") == "assistant" and full_history[j].get("tool_calls"):
+            i = j  # 从 assistant 开始
+            break
+        i += 1
+
+    # 2) 重建窗口（向前扩展后保持最大条数内尽量完整）
+    expanded = full_history[i:] if i < start else window
+    # 若扩展后超出窗口上限太多，取最近 max 条但保证开头不是 tool
+    if len(expanded) > len(window) + 8:  # 允许适度扩展
+        expanded = window
+
+    # 3) 截断末尾悬空的 assistant(tool_calls)（声明的 tool 未齐）
+    #    从末尾向前找最后一个完整的配对块
+    for idx in range(len(expanded) - 1, -1, -1):
+        m = expanded[idx]
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            declared = len(m.get("tool_calls") or [])
+            tools_after = 0
+            k = idx + 1
+            while k < len(expanded) and expanded[k].get("role") == "tool":
+                tools_after += 1
+                k += 1
+            if tools_after < declared:
+                return expanded[:idx]  # 截断到该 assistant 之前
+            break
+
+    return expanded
