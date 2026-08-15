@@ -88,6 +88,31 @@ def _build_trace_tree(request: Request, trace_id: str | None) -> dict | None:
         return None
 
 
+def _tool_calls_with_duration(result, trace_tree: dict | None) -> list[dict]:
+    """把工具调用列表与 Trace 中的耗时关联（按顺序配对 tool.execute span）。"""
+    calls = [{"name": tc.name, "arguments": tc.arguments} for tc in result.tool_calls]
+    if not trace_tree or not calls:
+        return calls
+    # 收集 trace 树中所有 tool.execute span 的耗时（按出现顺序）
+    durations: list[dict] = []
+
+    def walk(nodes):
+        for n in nodes:
+            if n.get("name") == "tool.execute":
+                durations.append({
+                    "duration_ms": n.get("duration_ms"),
+                    "status": n.get("status"),
+                    "error": n.get("error"),
+                })
+            walk(n.get("children", []))
+
+    walk(trace_tree.get("spans", []))
+    for i, call in enumerate(calls):
+        if i < len(durations):
+            call.update(durations[i])
+    return calls
+
+
 # ---------------------------------------------------------------------------
 # SSE 流式聊天（复用 LoopHooks 推送事件）
 # ---------------------------------------------------------------------------
@@ -121,6 +146,7 @@ async def web_chat_stream(req: WebChatRequest, request: Request) -> StreamingRes
                 "success": envelope.success,
                 "data": str(envelope.data)[:300] if envelope.data else None,
                 "error": envelope.error.model_dump() if envelope.error else None,
+                "duration_ms": (envelope.metadata or {}).get("duration_ms"),
             })
 
         async def _hook_before_final(response, step: int) -> None:
@@ -148,7 +174,7 @@ async def web_chat_stream(req: WebChatRequest, request: Request) -> StreamingRes
                 await _emit("done", {
                     "session_id": result.session_id,
                     "answer": result.answer,
-                    "tool_calls": [{"name": tc.name, "arguments": tc.arguments} for tc in result.tool_calls],
+                    "tool_calls": _tool_calls_with_duration(result, trace_tree),
                     "plan": [s.model_dump() for s in result.plan],
                     "plan_revisions": result.plan_revisions,
                     "trace_id": result.trace_id,

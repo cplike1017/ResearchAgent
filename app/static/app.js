@@ -1,4 +1,4 @@
-﻿/* Agent Runtime Web UI 前端逻辑 v3 */
+/* Agent Runtime Web UI 前端逻辑 v3 */
 "use strict";
 
 const state = {
@@ -185,17 +185,85 @@ function addMessage(role, content, meta) {
 }
 
 function addToolMsg(data) {
+  // 流式中的工具调用卡片：点击可展开查看参数/输出/耗时
   const div = document.createElement("div");
-  div.className = "msg tool";
-  const status = data.success ? '<span class="tool-ok">✓</span>' : '<span class="tool-err">✗</span>';
+  div.className = "msg tool ts-card";
+  div.dataset.toolCallId = data.tool_call_id || data.tool || "";
+  const dur = data.duration_ms != null ? ` · ⏱ ${formatMs(data.duration_ms)}` : "";
+  const statusIcon = data.success === false ? "❌" : "✅";
   div.innerHTML = `
-    <div class="tool-name">🛠 ${esc(data.tool)}</div>
-    <div>${status} 参数: ${esc(JSON.stringify(data.arguments))}</div>
-    ${data.data && data.data !== "等待执行..." ? `<div class="tool-ok">→ ${esc(String(data.data).slice(0, 200))}</div>` : ""}
-    ${data.error ? `<div class="tool-err">→ ${esc(data.error.message || JSON.stringify(data.error))}</div>` : ""}
+    <div class="ts-header">
+      <span class="ts-icon">🛠</span>
+      <span class="ts-name">${esc(data.tool)}</span>
+      <span class="ts-status ${data.success === false ? "err" : "ok"}">${statusIcon}</span>
+      <span class="ts-dur">${dur}</span>
+      <span class="ts-args-preview">${esc(JSON.stringify(data.arguments || {}).slice(0, 50))}</span>
+      <span class="ts-caret">▾</span>
+    </div>
+    <div class="ts-body">
+      <div class="ts-section">
+        <div class="ts-label">📋 参数</div>
+        <pre class="ts-code">${esc(JSON.stringify(data.arguments || {}, null, 2))}</pre>
+      </div>
+      ${data.data && data.data !== "等待执行..." ? `
+      <div class="ts-section">
+        <div class="ts-label">📤 输出</div>
+        <pre class="ts-code">${esc(String(data.data).slice(0, 300))}</pre>
+      </div>` : `<div class="ts-section"><div class="ts-label">⏳ 等待执行...</div></div>`}
+      ${data.error ? `
+      <div class="ts-section">
+        <div class="ts-label err-label">⚠️ 错误</div>
+        <pre class="ts-code err-code">${esc(data.error.message || JSON.stringify(data.error))}</pre>
+      </div>` : ""}
+    </div>
   `;
+  // 点击展开
+  div.querySelector(".ts-header").addEventListener("click", () => {
+    div.classList.toggle("open");
+    const caret = div.querySelector(".ts-caret");
+    caret.textContent = div.classList.contains("open") ? "▴" : "▾";
+  });
   $("#messages").appendChild(div);
   scrollToBottom();
+  return div;
+}
+
+// 按工具名找到最近一张卡片（流式结果回填）
+function updateToolCard(name, data) {
+  const cards = $$("#messages .ts-card[data-tool-call-id]");
+  for (let i = cards.length - 1; i >= 0; i--) {
+    const card = cards[i];
+    if (card.dataset.toolCallId === name || (card.dataset.toolCallId === "" && card.querySelector(".ts-name").textContent === name)) {
+      // 更新状态和输出
+      const statusEl = card.querySelector(".ts-status");
+      statusEl.textContent = data.success === false ? "❌" : "✅";
+      statusEl.className = "ts-status " + (data.success === false ? "err" : "ok");
+      if (data.duration_ms != null) {
+        const durEl = card.querySelector(".ts-dur");
+        durEl.textContent = " · ⏱ " + formatMs(data.duration_ms);
+      }
+      const body = card.querySelector(".ts-body");
+      if (data.data && data.data !== "等待执行...") {
+        body.innerHTML = `
+          <div class="ts-section">
+            <div class="ts-label">📋 参数</div>
+            <pre class="ts-code">${esc(JSON.stringify(data.arguments || {}, null, 2))}</pre>
+          </div>
+          <div class="ts-section">
+            <div class="ts-label">📤 输出</div>
+            <pre class="ts-code">${esc(String(data.data).slice(0, 300))}</pre>
+          </div>
+          ${data.error ? `
+          <div class="ts-section">
+            <div class="ts-label err-label">⚠️ 错误</div>
+            <pre class="ts-code err-code">${esc(data.error.message || JSON.stringify(data.error))}</pre>
+          </div>` : ""}
+        `;
+      }
+      return true;
+    }
+  }
+  return false;
 }
 
 function addErrorMsg(message) {
@@ -259,9 +327,21 @@ function addWorkflowPanel(data, opts) {
   $("#messages").appendChild(panel);
   panel.classList.add("open");
   scrollToBottom();
-  // 绑定树节点折叠
+  // 绑定树节点折叠 + 工具卡片展开
   bindTreeToggles(panel);
+  bindToolStepToggles(panel);
   return panel;
+}
+
+function bindToolStepToggles(panel) {
+  panel.querySelectorAll(".ts-card").forEach((card) => {
+    const header = card.querySelector(".ts-header");
+    header.addEventListener("click", () => {
+      card.classList.toggle("open");
+      const caret = card.querySelector(".ts-caret");
+      caret.textContent = card.classList.contains("open") ? "▴" : "▾";
+    });
+  });
 }
 
 function renderWorkflowBody(data) {
@@ -294,20 +374,61 @@ function renderWorkflowBody(data) {
     html += `<div class="trace-tree"><div class="tn-row"><span class="tn-name">(Tracing 未启用)</span></div></div>`;
   }
 
-  // 3) 工具时间线
+  // 3) 工具调用步骤卡片（可点击展开详情）
   if (data.tool_calls && data.tool_calls.length) {
-    html += `<div class="tool-timeline"><div class="tl-title">工具调用（${data.tool_calls.length}）</div>`;
-    data.tool_calls.forEach((tc) => {
-      html += `<div class="tl-item">
-        <span class="tl-icon">🛠</span>
-        <span class="tl-name">${esc(tc.name)}</span>
-        <span class="tl-args">${esc(JSON.stringify(tc.arguments || {}))}</span>
-      </div>`;
+    html += `<div class="tool-steps"><div class="tl-title">工具调用流程（${data.tool_calls.length} 步）</div>`;
+    data.tool_calls.forEach((tc, i) => {
+      html += renderToolStepCard(tc, i);
     });
     html += `</div>`;
   }
 
   return html;
+}
+
+function renderToolStepCard(tc, index) {
+  const dur = tc.duration_ms != null ? formatMs(tc.duration_ms) : "";
+  const statusIcon = tc.status === "ERROR" ? "❌" : tc.error ? "❌" : "✅";
+  const statusCls = tc.status === "ERROR" || tc.error ? "err" : "ok";
+  const argsPreview = JSON.stringify(tc.arguments || {}).slice(0, 60);
+  const dataStr = tc.data ? String(tc.data).slice(0, 120) : "";
+  const errStr = tc.error ? (tc.error.message || JSON.stringify(tc.error)).slice(0, 120) : "";
+  return `
+    <div class="ts-card" data-index="${index}">
+      <div class="ts-header">
+        <span class="ts-num">${index + 1}</span>
+        <span class="ts-icon">🛠</span>
+        <span class="ts-name">${esc(tc.name)}</span>
+        <span class="ts-status ${statusCls}">${statusIcon}</span>
+        ${dur ? `<span class="ts-dur">⏱ ${dur}</span>` : ""}
+        <span class="ts-args-preview">${esc(argsPreview)}</span>
+        <span class="ts-caret">▾</span>
+      </div>
+      <div class="ts-body">
+        <div class="ts-section">
+          <div class="ts-label">📋 参数</div>
+          <pre class="ts-code">${esc(JSON.stringify(tc.arguments || {}, null, 2))}</pre>
+        </div>
+        ${dataStr ? `
+        <div class="ts-section">
+          <div class="ts-label">📤 输出</div>
+          <pre class="ts-code">${esc(dataStr)}${String(tc.data).length > 120 ? "\n..." : ""}</pre>
+        </div>` : ""}
+        ${errStr ? `
+        <div class="ts-section">
+          <div class="ts-label err-label">⚠️ 错误</div>
+          <pre class="ts-code err-code">${esc(errStr)}</pre>
+        </div>` : ""}
+        ${dur ? `
+        <div class="ts-meta">⏱ 耗时: ${dur}</div>` : ""}
+      </div>
+    </div>`;
+}
+
+function formatMs(ms) {
+  if (ms == null) return "";
+  if (ms >= 1000) return (ms / 1000).toFixed(1) + "s";
+  return Math.round(ms) + "ms";
 }
 
 function renderTraceNodeV2(span, depth, totalDur) {
@@ -470,7 +591,10 @@ function handleFrame(frame, contentEl, onComplete) {
       }
       break;
     case "tool_result":
-      addToolMsg(data);
+      // 回填对应的卡片（按工具名匹配最近的未完成卡片）
+      if (!updateToolCard(data.tool, data)) {
+        addToolMsg(data); // 找不到则新增
+      }
       break;
     case "final":
       contentEl.innerHTML = (window.marked && typeof window.marked.parse === "function")
