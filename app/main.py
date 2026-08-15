@@ -90,6 +90,19 @@ def create_app(settings: Settings | None = None, redis=None) -> FastAPI:
         app.state.settings = settings
         # 3) Web 进程内运行时（记忆 + MCP + 技能）
         app.state.runtime = build_web_runtime(settings, recorder)
+
+        # 4) 后台预初始化 MCP（不阻塞启动；首次请求时已就绪）
+        if app.state.runtime.mcp_client is not None:
+            try:
+                await app.state.runtime.mcp_client.connect_all()
+                from app.mcp.bridge import MCPBridge
+
+                count = MCPBridge(app.state.runtime.mcp_client).register_all(app.state.runtime.registry)
+                print(f"[api] MCP 预初始化完成：注册 {count} 个工具", flush=True)
+            except Exception as exc:
+                print(f"[api] MCP 预初始化失败（不影响内置工具）: {exc}", flush=True)
+            app.state.runtime._mcp_initialized = True
+
         print(f"[api] Redis 队列已连接: {settings.redis_url}", flush=True)
         print(f"[api] Web 运行时就绪（mode={settings.agent_mode}, memory={settings.memory_enabled}）", flush=True)
         yield
