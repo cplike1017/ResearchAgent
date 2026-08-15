@@ -93,6 +93,16 @@ body {
 .session-item .si-icon { font-size: 11px; }
 .session-item .si-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .session-item .si-time { font-size: 10px; opacity: 0.7; }
+.session-item .si-del {
+  font-size: 10px;
+  color: var(--text-dim);
+  padding: 0 3px;
+  border-radius: 3px;
+  opacity: 0;
+  cursor: pointer;
+}
+.session-item:hover .si-del { opacity: 1; }
+.session-item .si-del:hover { color: var(--err); background: rgba(239, 68, 68, 0.15); }
 
 .mode-switch { display: flex; gap: 8px; }
 .mode-btn {
@@ -318,3 +328,58 @@ body {
   font-size: 14px;
 }
 .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.stop-btn {
+  width: 42px;
+  background: var(--err);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-weight: 700;
+  cursor: pointer;
+  font-size: 16px;
+}
+.stop-btn:hover { filter: brightness(1.2); }
+
+/* ---- Markdown 内容渲染 ---- */
+.md-body { font-size: 14px; line-height: 1.7; }
+.md-body p { margin: 6px 0; }
+.md-body h1, .md-body h2, .md-body h3 { margin: 10px 0 6px; font-weight: 700; }
+.md-body h1 { font-size: 18px; } .md-body h2 { font-size: 16px; } .md-body h3 { font-size: 15px; }
+.md-body ul, .md-body ol { padding-left: 22px; margin: 6px 0; }
+.md-body li { margin: 3px 0; }
+.md-body code {
+  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: "Consolas", "Courier New", monospace;
+  font-size: 12px;
+  color: var(--accent);
+}
+.md-body pre {
+  background: var(--bg);
+  padding: 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 8px 0;
+  border: 1px solid var(--border);
+}
+.md-body pre code { background: none; padding: 0; color: var(--text); }
+.md-body table { border-collapse: collapse; margin: 8px 0; font-size: 13px; }
+.md-body th, .md-body td { border: 1px solid var(--border); padding: 5px 10px; }
+.md-body th { background: var(--bg); }
+.md-body blockquote { border-left: 3px solid var(--accent); padding-left: 10px; color: var(--text-dim); margin: 6px 0; }
+.md-body a { color: var(--accent); }
+
+/* 复制按钮 */
+.msg-actions { display: flex; gap: 6px; margin-top: 6px; }
+.copy-btn {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 4px;
+  font-size: 10px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.copy-btn:hover { color: var(--accent); border-color: var(--accent); }

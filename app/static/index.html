@@ -42,6 +42,12 @@
       <h3>会话 <button id="new-session" class="mini-btn" title="新建会话">＋</button></h3>
       <ul class="cap-list" id="session-list"></ul>
     </div>
+
+    <div class="panel">
+      <h3>文件 <button id="upload-btn" class="mini-btn" title="上传文件到沙箱">↑</button></h3>
+      <ul class="cap-list" id="file-list"></ul>
+      <input type="file" id="file-input" style="display:none">
+    </div>
   </aside>
 
   <!-- 主区 -->
@@ -62,11 +68,13 @@
 
     <div class="composer">
       <textarea id="input" placeholder="输入消息，Enter 发送，Shift+Enter 换行" rows="1"></textarea>
+      <button id="stop" class="stop-btn" style="display:none" title="停止生成">■</button>
       <button id="send" class="send-btn">发送</button>
     </div>
   </main>
 </div>
 
+<script src="/marked.min.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

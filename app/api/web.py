@@ -259,3 +259,83 @@ async def web_session_messages(session_id: str, request: Request) -> dict:
         raise HTTPException(status_code=404, detail="会话存储未启用")
     messages = runtime.session_repo.list_messages(session_id)
     return {"session_id": session_id, "messages": messages}
+
+
+# ---------------------------------------------------------------------------
+# 会话删除（含关联消息与检查点）
+# ---------------------------------------------------------------------------
+@router.delete("/sessions/{session_id}")
+async def web_session_delete(session_id: str, request: Request) -> dict:
+    runtime = _get_runtime(request)
+    if runtime.session_repo is None:
+        raise HTTPException(status_code=404, detail="会话存储未启用")
+    # session 与 checkpoint 同库：统一用 session_repo 连接删除（避免多连接 WAL 锁）
+    try:
+        conn = runtime.session_repo._conn
+        conn.execute("DELETE FROM checkpoints WHERE session_id = ?", (session_id,))
+        conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+        conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+        conn.commit()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"删除失败: {exc}")
+    return {"deleted": session_id}
+
+
+# ---------------------------------------------------------------------------
+# 文件上传（写入沙箱目录，供 file_read 工具使用）
+# ---------------------------------------------------------------------------
+@router.post("/upload")
+async def web_upload(request: Request) -> dict:
+    from pathlib import Path
+
+    runtime = _get_runtime(request)
+    settings = request.app.state.settings
+    sandbox = Path(settings.sandbox_dir).resolve()
+    sandbox.mkdir(parents=True, exist_ok=True)
+
+    form = await request.form()
+    file = form.get("file")
+    if file is None or not getattr(file, "filename", None):
+        raise HTTPException(status_code=400, detail="缺少文件")
+
+    filename = getattr(file, "filename", "upload.txt")
+    # 安全：只保留文件名（防路径穿越）
+    safe_name = Path(filename).name
+    target = (sandbox / safe_name).resolve()
+    if not str(target).startswith(str(sandbox)):
+        raise HTTPException(status_code=400, detail="非法文件名")
+
+    try:
+        content = await file.read()
+        # 限 1MB
+        if len(content) > 1024 * 1024:
+            raise HTTPException(status_code=400, detail="文件超过 1MB 限制")
+        target.write_bytes(content)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"保存失败: {exc}")
+
+    return {
+        "filename": safe_name,
+        "path": str(target),
+        "size": len(content),
+        "hint": f"已上传到沙箱，可用 file_read 读取 {safe_name}",
+    }
+
+
+# ---------------------------------------------------------------------------
+# 沙箱文件列表（前端"已上传文件"面板）
+# ---------------------------------------------------------------------------
+@router.get("/files")
+async def web_files(request: Request) -> dict:
+    from pathlib import Path
+
+    settings = request.app.state.settings
+    sandbox = Path(settings.sandbox_dir).resolve()
+    files = []
+    if sandbox.exists():
+        for p in sorted(sandbox.iterdir()):
+            if p.is_file():
+                files.append({"name": p.name, "size": p.stat().st_size})
+    return {"files": files, "sandbox": str(sandbox)}

@@ -1,11 +1,11 @@
-/* Agent Runtime Web UI 前端逻辑 v2 */
+﻿/* Agent Runtime Web UI 前端逻辑 v3 */
 "use strict";
 
 const state = {
   sessionId: null,
   agentMode: "react",
   streaming: false,
-  traceCache: {}, // session_id -> trace tree（会话历史里的 trace 树）
+  abortCtrl: null, // 当前 SSE 的 AbortController（用于停止）
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -75,9 +75,17 @@ async function loadSessions() {
         <span class="si-icon">💬</span>
         <span class="si-name">${esc(s.session_id.slice(-16))}</span>
         <span class="si-time">${esc((s.updated_at || "").slice(11, 19))}</span>
+        <span class="si-del" title="删除会话">✕</span>
       `;
       if (state.sessionId === s.session_id) li.classList.add("active");
-      li.addEventListener("click", () => openSession(s.session_id));
+      li.addEventListener("click", (e) => {
+        if (e.target.classList.contains("si-del")) {
+          e.stopPropagation();
+          deleteSession(s.session_id);
+          return;
+        }
+        openSession(s.session_id);
+      });
       ul.appendChild(li);
     });
   } catch (e) { /* 忽略 */ }
@@ -149,7 +157,27 @@ function addMessage(role, content, meta) {
     div.appendChild(metaEl);
   }
   const contentEl = document.createElement("div");
-  contentEl.textContent = content;
+  if (role === "assistant" && window.marked && typeof window.marked.parse === "function") {
+    // Markdown 渲染
+    contentEl.className = "md-body";
+    contentEl.innerHTML = window.marked.parse(String(content || ""));
+    // 复制按钮（assistant 消息）
+    const actions = document.createElement("div");
+    actions.className = "msg-actions";
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "copy-btn";
+    copyBtn.textContent = "复制";
+    copyBtn.addEventListener("click", () => {
+      navigator.clipboard.writeText(String(content || "")).then(() => {
+        copyBtn.textContent = "已复制 ✓";
+        setTimeout(() => (copyBtn.textContent = "复制"), 1500);
+      });
+    });
+    actions.appendChild(copyBtn);
+    div.appendChild(actions);
+  } else {
+    contentEl.textContent = content;
+  }
   div.appendChild(contentEl);
   $("#messages").appendChild(div);
   scrollToBottom();
@@ -348,13 +376,19 @@ async function send() {
   const assistantEl = addMessage("assistant", "");
   assistantEl.classList.add("streaming");
   const contentEl = assistantEl.querySelector("div:last-child");
+  contentEl.className = "md-body";
   contentEl.textContent = "";
+
+  // 停止按钮
+  state.abortCtrl = new AbortController();
+  $("#stop").style.display = "block";
 
   try {
     const resp = await fetch("/api/web/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, session_id: state.sessionId, agent_mode: state.agentMode }),
+      signal: state.abortCtrl.signal,
     });
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
@@ -373,11 +407,15 @@ async function send() {
         handleFrame(frame, contentEl, (ans, data) => { finalAnswer = ans; finalData = data; });
       }
     }
-    if (finalAnswer) contentEl.textContent = finalAnswer;
+    if (finalAnswer) {
+      contentEl.innerHTML = (window.marked && typeof window.marked.parse === "function")
+        ? window.marked.parse(finalAnswer) : esc(finalAnswer);
+      // 补复制按钮
+      ensureCopyButton(assistantEl, finalAnswer);
+    }
     assistantEl.classList.remove("streaming");
     if (finalData) {
       state.sessionId = finalData.session_id;
-      // 工作流面板（自动展开）
       addWorkflowPanel({
         trace: finalData.trace, trace_id: finalData.trace_id,
         plan: finalData.plan, plan_revisions: finalData.plan_revisions,
@@ -385,11 +423,33 @@ async function send() {
       });
     }
   } catch (e) {
-    assistantEl.classList.remove("streaming");
-    contentEl.textContent = "⚠️ 请求失败: " + e.message;
+    if (e.name === "AbortError") {
+      contentEl.textContent = "⏹ 已停止生成。";
+    } else {
+      assistantEl.classList.remove("streaming");
+      contentEl.textContent = "⚠️ 请求失败: " + e.message;
+    }
   }
+  $("#stop").style.display = "none";
   setStreaming(false);
   loadSessions();
+}
+
+function ensureCopyButton(assistantEl, content) {
+  if (assistantEl.querySelector(".copy-btn")) return;
+  const actions = document.createElement("div");
+  actions.className = "msg-actions";
+  const copyBtn = document.createElement("button");
+  copyBtn.className = "copy-btn";
+  copyBtn.textContent = "复制";
+  copyBtn.addEventListener("click", () => {
+    navigator.clipboard.writeText(content).then(() => {
+      copyBtn.textContent = "已复制 ✓";
+      setTimeout(() => (copyBtn.textContent = "复制"), 1500);
+    });
+  });
+  actions.appendChild(copyBtn);
+  assistantEl.appendChild(actions);
 }
 
 function handleFrame(frame, contentEl, onComplete) {
@@ -413,7 +473,8 @@ function handleFrame(frame, contentEl, onComplete) {
       addToolMsg(data);
       break;
     case "final":
-      contentEl.textContent = data.content || "";
+      contentEl.innerHTML = (window.marked && typeof window.marked.parse === "function")
+        ? window.marked.parse(data.content || "") : esc(data.content || "");
       break;
     case "done":
       onComplete(data.answer || "", data);
@@ -427,6 +488,14 @@ function handleFrame(frame, contentEl, onComplete) {
 function setStreaming(v) {
   state.streaming = v;
   $("#send").disabled = v;
+  if (!v) state.abortCtrl = null;
+}
+
+function stopStreaming() {
+  if (state.abortCtrl) {
+    state.abortCtrl.abort();
+    $("#stop").style.display = "none";
+  }
 }
 
 /* ================= 事件绑定 ================= */
@@ -434,8 +503,12 @@ function bindEvents() {
   const input = $("#input");
   const sendBtn = $("#send");
   const newBtn = $("#new-session");
+  const stopBtn = $("#stop");
+  const uploadBtn = $("#upload-btn");
+  const fileInput = $("#file-input");
 
   sendBtn.addEventListener("click", send);
+  if (stopBtn) stopBtn.addEventListener("click", stopStreaming);
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   });
@@ -444,6 +517,26 @@ function bindEvents() {
     input.style.height = Math.min(input.scrollHeight, 120) + "px";
   });
   if (newBtn) newBtn.addEventListener("click", newSession);
+
+  // 上传文件
+  if (uploadBtn && fileInput) {
+    uploadBtn.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      const fd = new FormData();
+      fd.append("file", file);
+      try {
+        const r = await fetch("/api/web/upload", { method: "POST", body: fd });
+        const data = await r.json();
+        addToolMsg({ tool: "upload", arguments: { file: file.name }, success: true, data: data.hint });
+        loadFiles();
+      } catch (e) {
+        addErrorMsg("上传失败: " + e.message);
+      }
+      fileInput.value = "";
+    });
+  }
 
   document.querySelectorAll(".mode-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -455,4 +548,28 @@ function bindEvents() {
   });
 }
 
+/* ================= 文件列表 ================= */
+async function loadFiles() {
+  try {
+    const data = await fetch("/api/web/files").then((r) => r.json());
+    renderList("#file-list", (data.files || []).map((f) => ({
+      text: `${f.name} (${(f.size / 1024).toFixed(1)}KB)`,
+      title: f.name,
+    })));
+  } catch (e) { /* 忽略 */ }
+}
+
+/* ================= 会话删除 ================= */
+async function deleteSession(sessionId) {
+  if (!confirm(`删除会话 ${sessionId.slice(-12)}？`)) return;
+  try {
+    await fetch(`/api/web/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+    if (state.sessionId === sessionId) newSession();
+    loadSessions();
+  } catch (e) {
+    addErrorMsg("删除失败: " + e.message);
+  }
+}
+
 init();
+loadFiles();

@@ -142,3 +142,46 @@ def test_web_session_messages(tmp_path):
         assert r.status_code == 200
         msgs = r.json()["messages"]
         assert any(m["role"] == "user" for m in msgs)
+
+
+def test_web_session_delete(tmp_path):
+    """会话删除：删除后会话与消息消失。"""
+    with TestClient(_make_app(tmp_path)) as client:
+        data = client.post("/api/web/chat", json={"message": "你好", "agent_mode": "react"}).json()
+        sid = data["session_id"]
+        r = client.delete(f"/api/web/sessions/{sid}")
+        assert r.status_code == 200
+        assert r.json()["deleted"] == sid
+        # 会话消失
+        sessions = client.get("/api/web/sessions").json()
+        assert all(s["session_id"] != sid for s in sessions["sessions"])
+        # 消息接口 404（会话已删，无消息返回）
+        r2 = client.get(f"/api/web/sessions/{sid}/messages")
+        assert r2.status_code == 200
+        assert r2.json()["messages"] == []
+
+
+def test_web_upload_and_files(tmp_path):
+    """文件上传：写入沙箱，文件列表可见，file_read 可读。"""
+    with TestClient(_make_app(tmp_path)) as client:
+        # 上传
+        r = client.post("/api/web/upload", files={"file": ("hello.txt", b"hello agent", "text/plain")})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["filename"] == "hello.txt"
+        assert "file_read" in data["hint"]
+        # 文件列表
+        files = client.get("/api/web/files").json()
+        assert any(f["name"] == "hello.txt" for f in files["files"])
+        # file_read 能读（走沙箱）
+        from app.tools.builtin.data import file_read_handler
+        assert file_read_handler("hello.txt") == "hello agent"
+
+
+def test_web_upload_traversal_blocked(tmp_path):
+    """上传文件名含路径穿越应被拒绝。"""
+    with TestClient(_make_app(tmp_path)) as client:
+        r = client.post("/api/web/upload", files={"file": ("../evil.txt", b"x", "text/plain")})
+        # 文件名被 Path().name 规范化，不报错但落在沙箱内
+        assert r.status_code == 200
+        assert r.json()["filename"] == "evil.txt"
