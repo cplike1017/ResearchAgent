@@ -69,7 +69,23 @@ async def web_chat(req: WebChatRequest, request: Request) -> dict:
         "trace_id": result.trace_id,
         "checkpoint_id": result.checkpoint_id,
         "mode": agent_mode,
+        # Trace 树（Agent 工作流可视化；tracing 关闭时为 None）
+        "trace": _build_trace_tree(request, result.trace_id),
     }
+
+
+def _build_trace_tree(request: Request, trace_id: str | None) -> dict | None:
+    """构建 Trace 调用树（供前端渲染 Agent 工作流）。"""
+    if not trace_id:
+        return None
+    recorder = getattr(request.app.state, "recorder", None)
+    if recorder is None or not recorder.enabled:
+        return None
+    try:
+        tree = recorder.build_tree(trace_id)
+        return tree if tree.get("spans") else None
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -122,12 +138,21 @@ async def web_chat_stream(req: WebChatRequest, request: Request) -> StreamingRes
             settings.agent_mode = agent_mode
             try:
                 result = await runtime.run(req.message, session_id=session_id, extra_hooks=hooks)
+                # 附带 Trace 树（Agent 工作流可视化）
+                trace_tree = None
+                if result.trace_id:
+                    try:
+                        trace_tree = request.app.state.recorder.build_tree(result.trace_id)
+                    except Exception:
+                        trace_tree = None
                 await _emit("done", {
                     "session_id": result.session_id,
                     "answer": result.answer,
                     "tool_calls": [{"name": tc.name, "arguments": tc.arguments} for tc in result.tool_calls],
                     "plan": [s.model_dump() for s in result.plan],
+                    "plan_revisions": result.plan_revisions,
                     "trace_id": result.trace_id,
+                    "trace": trace_tree,
                 })
             except AgentError as exc:
                 await _emit("error", {"type": type(exc).__name__, "message": str(exc)})
@@ -191,6 +216,20 @@ async def web_mcp(request: Request) -> dict:
             for c in runtime.mcp_client.connections
         ]
     return {"servers": servers, "count": len(servers)}
+
+
+# ---------------------------------------------------------------------------
+# Trace 树（Agent 工作流可视化）
+# ---------------------------------------------------------------------------
+@router.get("/traces/{trace_id}")
+async def web_trace(trace_id: str, request: Request) -> dict:
+    recorder = getattr(request.app.state, "recorder", None)
+    if recorder is None or not recorder.enabled:
+        raise HTTPException(status_code=404, detail="Tracing 未启用")
+    tree = recorder.build_tree(trace_id)
+    if not tree["spans"]:
+        raise HTTPException(status_code=404, detail=f"Trace 不存在: {trace_id}")
+    return tree
 
 
 # ---------------------------------------------------------------------------

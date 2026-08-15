@@ -59,6 +59,47 @@ def test_web_chat_sync(tmp_path):
         assert data["session_id"]
 
 
+def test_web_chat_returns_trace(tmp_path):
+    """同步聊天响应应包含 Trace 树（工作流可视化）。"""
+    with TestClient(_make_app(tmp_path)) as client:
+        r = client.post("/api/web/chat", json={"message": "查询北京天气", "agent_mode": "react"})
+        data = r.json()
+        # test 环境 trace_enabled=False -> trace 为 None；单独启用 tracing 验证
+        if data["trace"] is not None:
+            assert "spans" in data["trace"]
+        # 通过独立接口验证（显式启用 tracing 的 app）
+        from app.main import create_app as _create
+        from app.config import Settings as _S
+        settings = _S(
+            environment="test", trace_enabled=True, llm_provider="stub",
+            database_url=f"sqlite:///{tmp_path}/trace.db",
+            trace_file=str(tmp_path / "trace.jsonl"),
+            skills_enabled=True,
+        )
+        app2 = _create(settings, redis=fakeredis.aioredis.FakeRedis(decode_responses=True))
+        with TestClient(app2) as client2:
+            r2 = client2.post("/api/web/chat", json={"message": "查询北京天气", "agent_mode": "react"})
+            data2 = r2.json()
+            assert data2["trace"] is not None
+            assert data2["trace"]["spans"]
+            names = [s["name"] for s in data2["trace"]["spans"]]
+            assert "agent.run" in names
+            # 递归收集所有节点名
+            def collect(nodes):
+                out = []
+                for n in nodes:
+                    out.append(n["name"])
+                    out.extend(collect(n.get("children", [])))
+                return out
+            all_names = collect(data2["trace"]["spans"])
+            assert "llm_call" in all_names
+            assert "tool.execute" in all_names
+            # 独立接口
+            r3 = client2.get(f"/api/web/traces/{data2['trace_id']}")
+            assert r3.status_code == 200
+            assert r3.json()["spans"]
+
+
 def test_web_chat_plan_mode(tmp_path):
     """plan 模式聊天：结果含 plan 字段。"""
     with TestClient(_make_app(tmp_path)) as client:

@@ -145,6 +145,83 @@ body {
 
 .msg-meta { font-size: 10px; color: var(--text-dim); margin-bottom: 4px; }
 
+/* ---- 工作流面板（Trace 树可视化）---- */
+.workflow {
+  align-self: flex-start;
+  width: 90%;
+  max-width: 720px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  font-size: 12px;
+}
+.workflow-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+}
+.workflow-header .wf-title { font-weight: 700; color: var(--accent); }
+.workflow-header .wf-meta { color: var(--text-dim); font-size: 11px; }
+.workflow-header .wf-toggle { color: var(--text-dim); font-size: 10px; }
+.workflow-body { padding: 10px 12px; display: none; max-height: 420px; overflow-y: auto; }
+.workflow.open .workflow-body { display: block; }
+
+/* Plan 步骤 */
+.plan-steps { margin-bottom: 10px; }
+.plan-step {
+  display: flex; align-items: center; gap: 8px;
+  padding: 3px 6px; border-radius: 4px;
+}
+.plan-step .ps-status { font-size: 10px; }
+.plan-step .ps-status.ok { color: var(--ok); }
+.plan-step .ps-status.fail { color: var(--err); }
+.plan-step .ps-status.skip { color: var(--text-dim); }
+.plan-step .ps-desc { flex: 1; }
+
+/* Trace 树 */
+.trace-tree { font-family: "Consolas", "Courier New", monospace; }
+.trace-node { padding: 2px 0 2px 0; }
+.trace-node .tn-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 2px 6px; border-radius: 4px;
+}
+.trace-node .tn-row:hover { background: var(--bg); }
+.trace-node .tn-children { margin-left: 18px; border-left: 1px solid var(--border); padding-left: 8px; }
+.tn-icon { width: 16px; text-align: center; }
+.tn-name { font-weight: 600; }
+.tn-type { color: var(--text-dim); font-size: 10px; background: var(--bg); padding: 0 5px; border-radius: 3px; }
+.tn-dur { color: var(--text-dim); font-size: 10px; margin-left: auto; }
+.tn-status { font-size: 10px; }
+.tn-status.ok { color: var(--ok); }
+.tn-status.err { color: var(--err); }
+.tn-tool { color: var(--accent); font-size: 11px; }
+.tn-err {
+  color: var(--err); font-size: 11px;
+  margin-left: 22px; padding: 4px 8px;
+  background: #3b1a1a; border-radius: 4px;
+}
+.tn-arg { color: var(--text-dim); font-size: 10px; }
+
+/* 工具调用时间线 */
+.tool-timeline { margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 8px; }
+.tool-timeline .tl-title { color: var(--text-dim); font-size: 11px; margin-bottom: 6px; }
+.tl-item {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 4px 6px; border-radius: 4px;
+  font-size: 11px;
+}
+.tl-item:hover { background: var(--bg); }
+.tl-item .tl-icon { font-size: 12px; }
+.tl-item .tl-name { color: var(--accent); font-weight: 600; min-width: 100px; }
+.tl-item .tl-args { color: var(--text-dim); word-break: break-all; }
+.tl-item .tl-time { margin-left: auto; color: var(--text-dim); font-size: 10px; }
+
 /* ---- Composer ---- */
 .composer {
   display: flex;
