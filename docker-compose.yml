@@ -1,0 +1,53 @@
+# ============================================================
+# agent-runtime 编排：api + redis + worker
+# 启动: docker compose up --build
+# 扩容: docker compose up --scale worker=3
+# 说明: LLM_* 等变量从 .env 读取（可选）；无 .env 时默认使用内置 Stub 模型
+# ============================================================
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: sqlite:////data/agent.db
+      TRACE_FILE: /data/traces.jsonl
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - agent_data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: python -m app.worker.worker
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: sqlite:////data/agent.db
+      TRACE_FILE: /data/traces.jsonl
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - agent_data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  agent_data:

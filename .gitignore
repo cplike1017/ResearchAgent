@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 运行时数据
+data/
+traces/*.jsonl
+evals/runs/
+
+# 环境变量（含密钥，禁止入库）
+.env
+
+# 测试与构建产物
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# IDE
+.idea/
+.vscode/

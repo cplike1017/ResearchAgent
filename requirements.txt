@@ -1,0 +1,27 @@
+# ============================================================
+# agent-runtime 依赖清单
+# 运行环境: Python 3.11+
+# 说明: 核心运行时只依赖通用 HTTP / 数据结构库，
+#       不绑定任何厂商 SDK，也不使用任何 Agent Framework。
+# ============================================================
+
+# ---- Web API ----
+fastapi>=0.110
+uvicorn[standard]>=0.29
+# fastapi 0.116.x 需要 starlette <0.47（starlette 1.0 破坏了兼容性）
+starlette>=0.40,<0.47
+
+# ---- 数据模型 / 配置 ----
+pydantic>=2.6
+pydantic-settings>=2.2
+
+# ---- HTTP 客户端（LLM 调用 / 通用请求）----
+httpx>=0.27
+
+# ---- Redis（队列 / Worker）----
+redis>=5.0
+
+# ---- 测试 ----
+pytest>=8.0
+pytest-asyncio>=0.23
+fakeredis>=2.23

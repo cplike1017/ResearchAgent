@@ -1,0 +1,33 @@
+{"case_id": "chat_001", "category": "no_tool", "input": "你好", "expected": {"tool": null}}
+{"case_id": "chat_002", "category": "no_tool", "input": "你是谁", "expected": {"tool": null}}
+{"case_id": "chat_003", "category": "no_tool", "input": "再见", "expected": {"tool": null}}
+{"case_id": "chat_004", "category": "no_tool", "input": "谢谢", "expected": {"tool": null}}
+{"case_id": "chat_005", "category": "no_tool", "input": "介绍一下你自己", "expected": {"tool": null}}
+{"case_id": "weather_001", "category": "single_tool", "input": "查询北京天气", "expected": {"tool": "get_weather", "arguments": {"city": "北京"}}}
+{"case_id": "weather_002", "category": "single_tool", "input": "查询上海天气", "expected": {"tool": "get_weather", "arguments": {"city": "上海"}}}
+{"case_id": "calc_001", "category": "single_tool", "input": "计算 12 * 34", "expected": {"tool": "calculator", "arguments": {"expression": "12 * 34"}}}
+{"case_id": "weather_003", "category": "single_tool", "input": "查询广州天气", "expected": {"tool": "get_weather", "arguments": {"city": "广州"}}}
+{"case_id": "calc_002", "category": "single_tool", "input": "计算 2 ** 10", "expected": {"tool": "calculator", "arguments": {"expression": "2 ** 10"}}}
+{"case_id": "args_001", "category": "tool_args", "input": "计算 123 * 456", "expected": {"tool": "calculator", "arguments": {"expression": "123 * 456"}}}
+{"case_id": "args_002", "category": "tool_args", "input": "查询北京的天气", "expected": {"tool": "get_weather", "arguments": {"city": "北京"}}}
+{"case_id": "args_003", "category": "tool_args", "input": "计算 100 / 4", "expected": {"tool": "calculator", "arguments": {"expression": "100 / 4"}}}
+{"case_id": "args_004", "category": "tool_args", "input": "查询深圳天气", "expected": {"tool": "get_weather", "arguments": {"city": "深圳"}}}
+{"case_id": "args_005", "category": "tool_args", "input": "计算 7 * 8", "expected": {"tool": "calculator", "arguments": {"expression": "7 * 8"}}}
+{"case_id": "multi_001", "category": "multi_tool", "input": "同时查询北京和上海天气", "expected": {"tools": [{"tool": "get_weather", "arguments": {"city": "北京"}}, {"tool": "get_weather", "arguments": {"city": "上海"}}]}}
+{"case_id": "multi_002", "category": "multi_tool", "input": "同时查询广州和杭州天气", "expected": {"tools": [{"tool": "get_weather", "arguments": {"city": "广州"}}, {"tool": "get_weather", "arguments": {"city": "杭州"}}]}}
+{"case_id": "multi_003", "category": "multi_tool", "input": "同时查询北京、上海和广州天气", "expected": {"tools": [{"tool": "get_weather", "arguments": {"city": "北京"}}, {"tool": "get_weather", "arguments": {"city": "上海"}}, {"tool": "get_weather", "arguments": {"city": "广州"}}]}}
+{"case_id": "multi_004", "category": "multi_tool", "input": "同时查询深圳和成都天气", "expected": {"tools": [{"tool": "get_weather", "arguments": {"city": "深圳"}}, {"tool": "get_weather", "arguments": {"city": "成都"}}]}}
+{"case_id": "multi_005", "category": "multi_tool", "input": "同时查询北京和杭州天气", "expected": {"tools": [{"tool": "get_weather", "arguments": {"city": "北京"}}, {"tool": "get_weather", "arguments": {"city": "杭州"}}]}}
+{"case_id": "err_001", "category": "tool_error", "input": "查询东京天气", "expected": {"tool": "get_weather", "tool_error": true}}
+{"case_id": "err_002", "category": "tool_error", "input": "计算 1 / 0", "expected": {"tool": "calculator", "tool_error": true}}
+{"case_id": "err_003", "category": "tool_error", "input": "查询纽约天气", "expected": {"tool": "get_weather", "tool_error": true}}
+{"case_id": "err_004", "category": "tool_error", "input": "计算 5 % 0", "expected": {"tool": "calculator", "tool_error": true}}
+{"case_id": "policy_001", "category": "policy_reject", "input": "查询北京天气", "expected": {"tool": "get_weather", "policy_reject": true}, "user": {"user_id": "guest", "roles": ["guest"], "permissions": []}}
+{"case_id": "policy_002", "category": "policy_reject", "input": "查询上海天气", "expected": {"tool": "get_weather", "policy_reject": true}, "user": {"user_id": "guest2", "roles": ["guest"], "permissions": []}}
+{"case_id": "ctx_001", "category": "session_context", "input": "查询北京天气", "expected": {"tool": "get_weather", "arguments": {"city": "北京"}}, "session_history": [{"role": "user", "content": "你好"}, {"role": "assistant", "content": "你好！有什么可以帮你？"}]}
+{"case_id": "ctx_002", "category": "session_context", "input": "计算 2 + 3", "expected": {"tool": "calculator", "arguments": {"expression": "2 + 3"}}, "session_history": [{"role": "user", "content": "计算 10 * 10"}, {"role": "assistant", "content": "计算结果：100.0。"}]}
+{"case_id": "rec_001", "category": "checkpoint_recovery", "input": "查询北京天气", "expected": {"tool": "get_weather", "arguments": {"city": "北京"}}, "recovery": true}
+{"case_id": "rec_002", "category": "checkpoint_recovery", "input": "计算 5 * 6", "expected": {"tool": "calculator", "arguments": {"expression": "5 * 6"}}, "recovery": true}
+{"case_id": "multi_step_001", "category": "multi_step", "input": "查询北京和上海天气", "expected": {"tools": [{"tool": "get_weather", "arguments": {"city": "北京"}}, {"tool": "get_weather", "arguments": {"city": "上海"}}]}}
+{"case_id": "multi_step_002", "category": "multi_step", "input": "同时查询广州和杭州天气", "expected": {"tools": [{"tool": "get_weather", "arguments": {"city": "广州"}}, {"tool": "get_weather", "arguments": {"city": "杭州"}}]}}
+{"case_id": "multi_step_003", "category": "multi_step", "input": "计算 12 * 34 和 56 + 7", "expected": {"tools": [{"tool": "calculator", "arguments": {"expression": "12 * 34"}}, {"tool": "calculator", "arguments": {"expression": "56 + 7"}}]}}
