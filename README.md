@@ -46,6 +46,10 @@ python -m evals.runner --compare evals/runs/<baseline>.json
 # 7) Docker 全链路
 docker compose up --build
 docker compose up --scale worker=3   # 扩容 Worker
+
+# 8) Web UI（进程内直连，无需 Redis/Worker）
+python -m uvicorn app.main:app --port 8000
+# 浏览器打开 http://localhost:8000/ 使用聊天界面
 ```
 
 ## 架构图
@@ -190,19 +194,25 @@ Client 轮询 GET /api/jobs/{job_id} 或 GET /api/traces/{trace_id}
 agent-runtime/
 ├── app/
 │   ├── api/routes.py        HTTP Gateway（chat / jobs / traces）
-│   ├── agent/               ReAct 循环 / 运行时 / 上下文构建 / 状态
+│   ├── api/web.py           Web UI 路由（进程内直连 + SSE 流式）
+│   ├── agent/               ReAct 循环 / 规划 / 运行时 / 上下文构建 / 状态
 │   ├── llm/client.py        统一 LLM Client（OpenAI-compatible + Stub）
+│   ├── memory/              Stage 8 记忆层（Embedding / sqlite-vec / 重排 / 提炼）
+│   ├── mcp/                 Stage 10 MCP 接入（client / bridge）
+│   ├── skills/              Stage 11 技能系统（loader / manager）
 │   ├── session/             SQLite 会话持久化
 │   ├── checkpoint/          SQLite 检查点（版本递增 / 断点恢复）
 │   ├── queue/               Redis List 自研队列（幂等 / 重试）
 │   ├── worker/              独立 Worker 进程
 │   ├── tools/               注册表 / Gateway / Policy / 内置工具
 │   ├── tracing/             Span / ContextVar / Recorder / trace_span
+│   ├── static/              Web UI 前端（HTML/CSS/JS）
 │   └── main.py              FastAPI 入口
+├── skills/                  可加载技能（SKILL.md 格式）
 ├── evals/                   数据集 / 评测器 / Runner / 回归报告
 ├── demos/                   每阶段可运行 Demo
 ├── docs/                    每阶段文档（含面试表达）
-├── tests/                   pytest（89 个用例）
+├── tests/                   pytest
 ├── traces/                  Trace JSONL
 ├── docker-compose.yml       api / redis / worker
 ├── Dockerfile

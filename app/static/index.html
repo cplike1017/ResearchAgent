@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Runtime Web UI</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="layout">
+  <!-- 侧边栏 -->
+  <aside class="sidebar">
+    <div class="brand">
+      <h1>Agent Runtime</h1>
+      <span class="badge" id="mode-badge">react</span>
+    </div>
+
+    <div class="panel">
+      <h3>执行模式</h3>
+      <div class="mode-switch">
+        <button class="mode-btn active" data-mode="react">React</button>
+        <button class="mode-btn" data-mode="plan">Plan</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>工具 <span class="count" id="tool-count">0</span></h3>
+      <ul class="cap-list" id="tool-list"></ul>
+    </div>
+
+    <div class="panel">
+      <h3>技能 <span class="count" id="skill-count">0</span></h3>
+      <ul class="cap-list" id="skill-list"></ul>
+    </div>
+
+    <div class="panel">
+      <h3>MCP Servers <span class="count" id="mcp-count">0</span></h3>
+      <ul class="cap-list" id="mcp-list"></ul>
+    </div>
+
+    <div class="panel">
+      <h3>会话</h3>
+      <ul class="cap-list" id="session-list"></ul>
+    </div>
+  </aside>
+
+  <!-- 主区 -->
+  <main class="main">
+    <header class="chat-header">
+      <span id="conn-status" class="status-dot"></span>
+      <span id="conn-text">连接中...</span>
+    </header>
+
+    <div class="messages" id="messages">
+      <div class="welcome">
+        <h2>🤖 Agent Runtime</h2>
+        <p>ReAct / Plan 双模式 · 记忆 · MCP · 技能</p>
+      </div>
+    </div>
+
+    <div class="composer">
+      <textarea id="input" placeholder="输入消息，Enter 发送，Shift+Enter 换行" rows="1"></textarea>
+      <button id="send" class="send-btn">发送</button>
+    </div>
+  </main>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

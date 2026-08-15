@@ -113,8 +113,11 @@ def test_weather_stub_fallback(monkeypatch):
     from app.tools.builtin import weather as weather_mod
     from app.tools.builtin.weather import weather_handler
 
-    # 强制关闭真实 API -> 用 Stub 数据（新 weather.py 用 Settings() 而非 get_settings()）
-    monkeypatch.setattr(weather_mod, "Settings", lambda: Settings(weather_use_real_api=False))
+    # 强制关闭真实 API + QWeather -> 用 Stub 数据（weather.py 用 Settings() 而非 get_settings()）
+    monkeypatch.setattr(
+        weather_mod, "Settings",
+        lambda: Settings(weather_use_real_api=False, qweather_host="", qweather_api_key=""),
+    )
     out = weather_handler("北京")
     assert "晴" in out or "多云" in out
 
@@ -123,7 +126,11 @@ def test_weather_unknown_city(monkeypatch):
     from app.tools.builtin import weather as weather_mod
     from app.tools.builtin.weather import weather_handler
 
-    monkeypatch.setattr(weather_mod, "Settings", lambda: Settings(weather_use_real_api=False))
+    # 清空 QWeather + 关闭真实 API，确保走 Stub 分支
+    monkeypatch.setattr(
+        weather_mod, "Settings",
+        lambda: Settings(weather_use_real_api=False, qweather_host="", qweather_api_key=""),
+    )
     with pytest.raises(ToolExecutionError):
         weather_handler("东京")
 
