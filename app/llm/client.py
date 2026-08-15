@@ -116,42 +116,55 @@ class OpenAICompatClient(BaseLLMClient):
             payload["tool_choice"] = kwargs.get("tool_choice", "auto")
 
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
-        try:
-            resp = await self._client.post(self._build_url(), json=payload, headers=headers)
-        except httpx.HTTPError as exc:
-            raise LLMError(f"LLM 网络请求失败: {exc}") from exc
+        url = self._build_url()
+        max_retries = self.settings.llm_max_retries
+        backoff = self.settings.llm_retry_backoff
 
-        if resp.status_code != 200:
-            raise LLMError(f"LLM 接口返回 {resp.status_code}: {resp.text[:300]}")
-
-        try:
-            data = resp.json()
-            choice = data["choices"][0]
-            message = choice.get("message", {})
-            usage = data.get("usage", {}) or {}
-        except (KeyError, IndexError, ValueError) as exc:
-            raise LLMError(f"LLM 响应格式非法: {exc}") from exc
-
-        # 解析 tool_calls（OpenAI 格式：arguments 是 JSON 字符串，需要反序列化）
-        tool_calls: list[ToolCallRequest] = []
-        for raw in message.get("tool_calls") or []:
-            fn = raw.get("function", {})
+        last_exc: Exception | None = None
+        for attempt in range(max_retries + 1):
             try:
-                args = json.loads(fn.get("arguments") or "{}")
-            except json.JSONDecodeError:
-                # 参数解析失败不应让整个调用崩溃，记为空参数并交由 Gateway 校验
-                args = {}
-            tool_calls.append(
-                ToolCallRequest(id=raw.get("id", ""), name=fn.get("name", ""), arguments=args)
+                resp = await self._client.post(url, json=payload, headers=headers)
+            except httpx.HTTPError as exc:
+                # 网络层错误（断连/超时）：瞬时，重试
+                last_exc = exc
+                if attempt < max_retries:
+                    await asyncio.sleep(backoff * (2**attempt))
+                    continue
+                raise LLMError(f"LLM 网络请求失败: {exc}") from exc
+
+            if resp.status_code != 200:
+                # 5xx / 429：瞬时，重试；4xx：不重试（参数/鉴权问题）
+                if resp.status_code >= 500 or resp.status_code == 429:
+                    last_exc = LLMError(f"LLM 接口返回 {resp.status_code}: {resp.text[:200]}")
+                    if attempt < max_retries:
+                        await asyncio.sleep(backoff * (2**attempt))
+                        continue
+                raise LLMError(f"LLM 接口返回 {resp.status_code}: {resp.text[:300]}")
+
+            try:
+                data = resp.json()
+                choice = data["choices"][0]
+                message = choice.get("message", {})
+                usage = data.get("usage", {}) or {}
+            except (KeyError, IndexError, ValueError) as exc:
+                raise LLMError(f"LLM 响应格式非法: {exc}") from exc
+
+            return LLMResponse(
+                content=message.get("content"),
+                tool_calls=[
+                    ToolCallRequest(
+                        id=raw.get("id", ""),
+                        name=(raw.get("function") or {}).get("name", ""),
+                        arguments=_parse_args(raw),
+                    )
+                    for raw in message.get("tool_calls") or []
+                ],
+                finish_reason=choice.get("finish_reason", "stop"),
+                usage=usage,
+                model=data.get("model", self.model),
             )
 
-        return LLMResponse(
-            content=message.get("content"),
-            tool_calls=tool_calls,
-            finish_reason=choice.get("finish_reason", "stop"),
-            usage=usage,
-            model=data.get("model", self.model),
-        )
+        raise LLMError(f"LLM 调用重试 {max_retries} 次后仍失败: {last_exc}") from last_exc
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +316,22 @@ class StubLLMClient(BaseLLMClient):
             usage=self._estimate_usage(messages, len(fallback)),
             model=self.model,
         )
+
+
+# ---------------------------------------------------------------------------
+# 工具参数解析（OpenAI 格式：arguments 是 JSON 字符串）
+# ---------------------------------------------------------------------------
+def _parse_args(raw: dict) -> dict:
+    """解析 tool_call 的 arguments（JSON 字符串 -> dict）。
+
+    参数解析失败不应让整个调用崩溃，记为空参数并交由 Gateway 校验。
+    """
+    fn = raw.get("function") or {}
+    try:
+        args = json.loads(fn.get("arguments") or "{}")
+        return args if isinstance(args, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
 
 
 # ---------------------------------------------------------------------------

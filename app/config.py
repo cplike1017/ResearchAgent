@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_model: str = "gpt-4o-mini"
     llm_timeout_seconds: float = 60.0
+    # LLM 调用瞬时错误重试次数（网络断连 / 5xx 重试；4xx 不重试）
+    llm_max_retries: int = 2
+    # LLM 重试间隔（秒，指数退避基数）
+    llm_retry_backoff: float = 1.0
 
     # ---------- Embedding / Memory（Stage 8 记忆层）----------
     # provider: auto | openai | stub
