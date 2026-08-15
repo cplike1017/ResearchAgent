@@ -67,9 +67,10 @@ class ToolGateway:
         recorder: TraceRecorder | None = None,
     ) -> None:
         self.registry = registry
-        self.policy_engine = policy_engine or PolicyEngine()
-        self.permission_checker = permission_checker or PermissionChecker()
         self.settings = settings or Settings()
+        # PolicyEngine 默认读取 self.settings 的风险配置（如 high 需确认）
+        self.policy_engine = policy_engine or PolicyEngine(settings=self.settings)
+        self.permission_checker = permission_checker or PermissionChecker()
         self.max_retries = self.settings.max_tool_retries
         self.recorder = recorder  # None = 不追踪
 

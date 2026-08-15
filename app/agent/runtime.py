@@ -66,6 +66,7 @@ class AgentRuntime:
         recorder: TraceRecorder | None = None,  # None = 不追踪
         memory: MemoryStore | None = None,  # Stage 8 记忆层（None = 不启用）
         mcp_client=None,  # MCPClientManager | None（None = 不接入 MCP）
+        skill_manager=None,  # SkillManager | None（None = 不启用技能）
         settings: Settings | None = None,
     ) -> None:
         self.settings = settings or get_settings()
@@ -82,6 +83,8 @@ class AgentRuntime:
         # MCP：注入的 client（调用方负责 connect/close）；未注入则不接入
         self.mcp_client = mcp_client
         self._mcp_initialized = False
+        # Skill：显式注入才启用（缺省 None = 不启用，保持向后兼容）
+        self.skill_manager = skill_manager if (skill_manager is not None and skill_manager.enabled) else None
         # 每个 run/resume 调用内的临时状态
         self._state: AgentState | None = None
         self._persisted = 0
@@ -226,10 +229,17 @@ class AgentRuntime:
 
         # Stage 8：构建上下文前，用最后一条用户消息检索相关记忆
         retrieved_docs: list[str] | None = None
+        query = _last_user_text(messages)
         if self.memory is not None:
-            query = _last_user_text(messages)
             if query:
                 retrieved_docs = await self.memory.retrieve(query)
+
+        # Skill：匹配用户输入对应的技能，指令注入上下文
+        if self.skill_manager is not None and query:
+            matched = await self.skill_manager.matched_skills(query)
+            if matched:
+                skill_blocks = [s.to_prompt_block() for s in matched]
+                retrieved_docs = (retrieved_docs or []) + skill_blocks
 
         # 追踪开启时，把 llm.chat 替换为带 llm_call Span 的版本
         llm_for_loop = self.llm

@@ -110,6 +110,13 @@ class Settings(BaseSettings):
     qweather_timeout_seconds: float = 10.0
     # 文件工具沙箱根目录（file_read/file_write 只允许在此目录内操作）
     sandbox_dir: str = "./data/sandbox"
+
+    # ---------- Policy（工具策略）----------
+    # 需要人工确认的风险等级（默认 high；当前无确认通道，命中即拒绝）
+    # 用户决定：暂设空（全部放行），后续引入 LLM 危险度评估后恢复
+    policy_require_confirmation_risks: str = ""  # 逗号分隔，如 "high,medium"
+    # 工具默认风险等级（MCP 外部工具注册时的默认值）
+    tool_default_risk_level: str = "low"
     # 邮件工具（QQ SMTP）：SMTP_USER 为发件人邮箱，SMTP_PASSWORD 为授权码
     smtp_host: str = "smtp.qq.com"
     smtp_port: int = 465
@@ -130,6 +137,14 @@ class Settings(BaseSettings):
     mcp_auto_register: bool = True
     # GitHub Token（github MCP server 子进程注入用）
     github_token: str = ""
+
+    # ---------- Skill 系统 ----------
+    # 技能目录（skills/ 下每个子目录一个技能，含 SKILL.md）
+    skills_dir: str = "./skills"
+    # 技能总开关
+    skills_enabled: bool = True
+    # 匹配策略: trigger(触发词规则) | llm(模型语义匹配)
+    skill_match_strategy: str = "trigger"
 
     # ---------- Tracing ----------
     trace_enabled: bool = True

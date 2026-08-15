@@ -115,8 +115,8 @@ class MCPBridge:
                         input_model=input_model,
                         handler=_proxy,
                         timeout_seconds=self.client.settings.mcp_tool_timeout_seconds,
-                        # MCP 工具来自外部（可能是任意代码/数据源），默认高风险需确认
-                        risk_level="high",
+                        # 风险等级：默认走配置（暂为 low 全放行，等待 HITL/LLM 评估）
+                        risk_level=self.client.settings.tool_default_risk_level,
                     ),
                 )
                 self.registered.append(full_name)

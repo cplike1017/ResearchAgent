@@ -122,6 +122,7 @@ def test_mcp_bridge_registers_tools(tmp_path):
 
 
 def test_mcp_tool_high_risk_blocked_by_policy(tmp_path):
+    """默认风险 low（放行）；显式配置 high 需确认时被 Policy 拦截。"""
     async def _run():
         settings = _settings_with_server(_make_server_script(tmp_path))
         client = MCPClientManager(settings)
@@ -130,15 +131,31 @@ def test_mcp_tool_high_risk_blocked_by_policy(tmp_path):
             registry = build_default_registry()
             MCPBridge(client).register_all(registry)
             gateway = ToolGateway(registry, settings=settings)
+            # 默认 low -> 直接放行执行
             r = await gateway.execute("demo_echo", {"text": "hi"}, user=UserContext(user_id="u"))
-            assert r.success is False
-            assert r.error is not None and "ToolPolicyError" in r.error.type
+            assert r.success is True
+
+            # 显式把风险提到 high + 配置 high 需确认 -> 拦截
+            from app.tools.registry import ToolDefinition
+
+            t = registry.get("demo_echo")
+            registry.register(
+                ToolDefinition(name=t.name, description=t.description, input_model=t.input_model,
+                               handler=t.handler, timeout_seconds=t.timeout_seconds, risk_level="high"),
+                overwrite=True,
+            )
+            gateway2 = ToolGateway(registry, settings=settings.model_copy(
+                update={"policy_require_confirmation_risks": "high"}))
+            r2 = await gateway2.execute("demo_echo", {"text": "hi"}, user=UserContext(user_id="u"))
+            assert r2.success is False
+            assert r2.error is not None and "ToolPolicyError" in r2.error.type
         finally:
             await client.close()
     asyncio.run(_run())
 
 
 def test_mcp_tool_executes_when_allowed(tmp_path):
+    """默认 low 风险，MCP 工具直接经 Gateway 执行。"""
     async def _run():
         settings = _settings_with_server(_make_server_script(tmp_path))
         client = MCPClientManager(settings)
@@ -146,13 +163,6 @@ def test_mcp_tool_executes_when_allowed(tmp_path):
             await client.connect_all()
             registry = build_default_registry()
             MCPBridge(client).register_all(registry)
-            for name in ("demo_echo", "demo_add"):
-                t = registry.get(name)
-                registry.register(
-                    ToolDefinition(name=t.name, description=t.description, input_model=t.input_model,
-                                   handler=t.handler, timeout_seconds=t.timeout_seconds, risk_level="low"),
-                    overwrite=True,
-                )
             gateway = ToolGateway(registry, settings=settings)
             r1 = await gateway.execute("demo_echo", {"text": "hello"}, user=UserContext(user_id="u"))
             assert r1.success is True

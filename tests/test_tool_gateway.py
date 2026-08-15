@@ -170,9 +170,20 @@ async def test_permission_ignored_when_no_requirement(gateway):
 # ---------------------------------------------------------------------------
 # Policy
 # ---------------------------------------------------------------------------
-async def test_policy_high_risk_requires_confirmation(gateway):
-    """高风险工具 -> REQUIRE_CONFIRMATION -> 无确认通道按拒绝处理。"""
-    result = await gateway.execute("danger_tool", {"target": "x"})
+async def test_policy_high_risk_requires_confirmation(gateway, settings):
+    """高风险工具（配置 high 需确认）-> REQUIRE_CONFIRMATION -> 无确认通道按拒绝处理。"""
+    from app.tools.policy import PolicyEngine
+
+    reg = build_test_registry()
+    gw = ToolGateway(
+        reg,
+        policy_engine=PolicyEngine(
+            require_confirmation_risks=["high"],
+            settings=settings.model_copy(update={"policy_require_confirmation_risks": "high"}),
+        ),
+        settings=settings.model_copy(update={"policy_require_confirmation_risks": "high"}),
+    )
+    result = await gw.execute("danger_tool", {"target": "x"})
     assert result.success is False
     assert result.error.type == "ToolPolicyError"
     assert "确认" in result.error.message
