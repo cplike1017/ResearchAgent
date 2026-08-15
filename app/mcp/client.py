@@ -87,17 +87,24 @@ class ServerConnection:
             raise MCPServerError(f"MCP server [{self.name}] 连接失败: {exc}") from exc
 
     async def _cleanup_quiet(self) -> None:
-        """尽力清理连接资源（忽略 SDK 跨 task 关闭噪音）。"""
-        try:
-            if self._session is not None:
-                await self._session.__aexit__(None, None, None)
-        except Exception:
-            pass
-        try:
-            if self._client_ctx is not None:
-                await self._client_ctx.__aexit__(None, None, None)
-        except Exception:
-            pass
+        """尽力清理连接资源（忽略 SDK 跨 task 关闭噪音）。
+
+        说明：MCP SDK 的 stdio_client 用 anyio task group 管理子进程，
+        __aexit__ 必须在进入时的同一 task 调用；uvicorn lifespan 关闭时
+        跨 task，会抛 BaseExceptionGroup / CancelledError。这里尽量清理，
+        残余噪音（unclosed transport 警告）在进程退出时由 OS 回收。
+        """
+        if self._session is not None:
+            try:
+                await asyncio.shield(self._session.__aexit__(None, None, None))
+            except (BaseExceptionGroup, Exception, asyncio.CancelledError):
+                pass
+        if self._client_ctx is not None:
+            try:
+                # 用 asyncio.shield 避免取消传播；捕获 SDK 跨 task 异常
+                await asyncio.shield(self._client_ctx.__aexit__(None, None, None))
+            except (BaseExceptionGroup, Exception, asyncio.CancelledError):
+                pass
         self._session = None
         self._client_ctx = None
 

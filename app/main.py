@@ -12,6 +12,7 @@ lifespan 中：
 
 Web UI 页面：http://localhost:8000/
 """
+import asyncio
 from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
@@ -105,7 +106,12 @@ def create_app(settings: Settings | None = None, redis=None) -> FastAPI:
 
         print(f"[api] Redis 队列已连接: {settings.redis_url}", flush=True)
         print(f"[api] Web 运行时就绪（mode={settings.agent_mode}, memory={settings.memory_enabled}）", flush=True)
+        print(f"[api] Redis 队列已连接: {settings.redis_url}", flush=True)
+        print(f"[api] Web 运行时就绪（mode={settings.agent_mode}, memory={settings.memory_enabled}）", flush=True)
         yield
+        if app.state.runtime.mcp_client is not None:
+            # 关闭 MCP：尽力清理并抑制 SDK 跨 task 噪音（捕获 BaseExceptionGroup）
+            await _quiet_mcp_close(app.state.runtime.mcp_client)
         if app.state.runtime.memory is not None:
             app.state.runtime.memory.close()
         await client.aclose()
@@ -119,3 +125,43 @@ def create_app(settings: Settings | None = None, redis=None) -> FastAPI:
 
 
 app = create_app()
+
+
+async def _quiet_mcp_close(mcp_client) -> None:
+    """静默关闭 MCP 连接。
+
+    MCP SDK 的 stdio_client（1.x）在非创建 task 中关闭时会抛
+    BaseExceptionGroup / "cancel scope in a different task"（Windows +
+    asyncio 下的 SDK 缺陷，不影响功能）。这里：
+      1. 捕获 BaseExceptionGroup（此前 except Exception 捕获不到）；
+      2. 临时设置 asyncio exception handler 抑制 "Task exception was
+         never retrieved" 类噪音；
+      3. 子进程残留由进程退出时 OS 回收。
+    """
+    import io
+    import sys
+
+    loop = asyncio.get_running_loop()
+    old_handler = loop.get_exception_handler()
+
+    def _quiet_handler(loop_, context):
+        # 吞掉 MCP 关闭相关的异常噪音；其余转发给默认处理器
+        msg = str(context.get("message", ""))
+        exc = context.get("exception")
+        if "never retrieved" in msg or (exc and "cancel scope" in str(exc)):
+            return
+        if old_handler:
+            old_handler(loop_, context)
+
+    loop.set_exception_handler(_quiet_handler)
+    old_stderr = sys.stderr
+    sys.stderr = io.StringIO()
+    try:
+        await mcp_client.close()
+    except BaseExceptionGroup:
+        pass
+    except Exception:
+        pass
+    finally:
+        loop.set_exception_handler(old_handler)
+        sys.stderr = old_stderr
