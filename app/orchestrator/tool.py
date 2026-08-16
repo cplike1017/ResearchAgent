@@ -34,7 +34,7 @@ def build_delegate_tool(orchestrator: OrchestratorRunner) -> ToolDefinition:
 
     async def handler(task: str, agents: list[str] | None = None, context: str = "") -> dict:
         # 第二道防线：即使工具可见性被绕过，深度超限也拒绝委派
-        from app.orchestrator.context import orchestration_depth
+        from app.orchestrator.context import current_session_id, orchestration_depth
 
         if orchestration_depth.get() >= orchestrator.settings.orchestrator_max_depth:
             return {
@@ -49,7 +49,9 @@ def build_delegate_tool(orchestrator: OrchestratorRunner) -> ToolDefinition:
                 "duration_ms": 0.0,
                 "trace_id": None,
             }
-        result = await orchestrator.run(task, agents=agents, context=context)
+        # 携带会话上下文：委派结果持久化到当前会话（主 agent 由 AgentRuntime 注入）
+        session_id = current_session_id.get() or ""
+        result = await orchestrator.run(task, agents=agents, context=context, session_id=session_id)
         return result.model_dump(mode="json")
 
     return ToolDefinition(

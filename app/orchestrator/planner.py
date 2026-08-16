@@ -22,7 +22,6 @@ from typing import Any
 from app.config import Settings, get_settings
 from app.llm.client import BaseLLMClient
 from app.orchestrator.models import OrchestrationPlan, SubTask
-from app.orchestrator.profiles import profile_names
 
 _PLAN_PROMPT = """你是一名多 Agent 编排主管（Orchestrator）。请把用户任务拆解为多个子 Agent 的协作计划。
 
@@ -47,10 +46,16 @@ class OrchestratorPlanner:
         self,
         settings: Settings | None = None,
         llm: BaseLLMClient | None = None,
+        profile_registry: "ProfileRegistry | None" = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.llm = llm
         self.strategy = self.settings.orchestrator_planner_strategy
+        # 档案注册表：planner 用它的 names 做校验、用它的描述喂给 LLM
+        # （动态注册的档案会立即参与分工）
+        from app.orchestrator.registry import ProfileRegistry
+
+        self.profile_registry = profile_registry or ProfileRegistry(self.settings)
 
     # ------------------------------------------------------------------
     # 主入口
@@ -65,12 +70,13 @@ class OrchestratorPlanner:
         :param agents: 调用方显式指定的子 agent 名单；非空时跳过 LLM 分工，
             直接按名单生成单步计划（每个指定 agent 一步，任务原样交给它）。
         """
+        names = self.profile_registry.names()
         if agents:
             return OrchestrationPlan(
                 rationale="调用方显式指定子 Agent",
                 steps=[
                     SubTask(
-                        agent=(name if name in profile_names() else "generalist"),
+                        agent=(name if name in names else "generalist"),
                         task=task,
                         depends_on=[],
                     )
@@ -88,8 +94,7 @@ class OrchestratorPlanner:
     # ------------------------------------------------------------------
     async def _llm_plan(self, task: str) -> OrchestrationPlan | None:
         profiles_block = "\n".join(
-            f"- {name}: {desc}"
-            for name, desc in _profiles_for_prompt()
+            f"- {p.name}: {p.description}" for p in self.profile_registry.all()
         )
         prompt = _PLAN_PROMPT.format(
             profiles=profiles_block,
@@ -120,7 +125,7 @@ class OrchestratorPlanner:
             if not isinstance(s, dict):
                 continue
             agent = str(s.get("agent", "generalist"))
-            if agent not in profile_names():
+            if agent not in self.profile_registry.names():
                 agent = "generalist"
             task_text = str(s.get("task", "")).strip()
             if not task_text:
@@ -145,12 +150,6 @@ class OrchestratorPlanner:
             rationale="stub 规划器：单步全交给 generalist",
             steps=[SubTask(agent="generalist", task=task, depends_on=[])],
         )
-
-
-def _profiles_for_prompt() -> list[tuple[str, str]]:
-    from app.orchestrator.profiles import BUILTIN_PROFILES
-
-    return [(p.name, p.description) for p in BUILTIN_PROFILES]
 
 
 def _extract_json(raw: str) -> dict | None:

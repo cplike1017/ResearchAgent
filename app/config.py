@@ -153,6 +153,8 @@ class Settings(BaseSettings):
     orchestrator_max_parallel: int = 3
     # 编排最大深度（多级编排）：1 = 仅主 agent 可委派；2 = 子 agent 也可再委派（孙级）
     orchestrator_max_depth: int = 2
+    # 动态注册的子 Agent 档案持久化文件（JSON；内置档案不落盘）
+    agent_profiles_file: str = "./data/agent_profiles.json"
 
     # ---------- Skill 系统 ----------
     # 技能目录（skills/ 下每个子目录一个技能，含 SKILL.md）

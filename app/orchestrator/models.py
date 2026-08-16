@@ -54,6 +54,7 @@ class OrchestrationResult(BaseModel):
     duration_ms: float = 0.0
     status: str = "SUCCEEDED"  # SUCCEEDED | PARTIAL | FAILED
     trace_id: str | None = None
+    run_id: str | None = Field(default=None, description="编排运行 ID（持久化后回填）")
 
     @property
     def succeeded(self) -> bool:

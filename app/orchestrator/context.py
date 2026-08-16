@@ -21,3 +21,9 @@ from contextvars import ContextVar
 
 # 当前编排深度（0 = 尚未进入任何编排，即主 agent 侧）
 orchestration_depth: ContextVar[int] = ContextVar("orchestration_depth", default=0)
+
+# 当前编排 run_id（持久化 parent 链用：嵌套编排记录父 run_id）
+current_run_id: ContextVar[str | None] = ContextVar("current_run_id", default=None)
+
+# 当前会话 ID（AgentRuntime.run 注入；delegate 工具读取它把编排结果挂到会话下）
+current_session_id: ContextVar[str] = ContextVar("current_session_id", default="")

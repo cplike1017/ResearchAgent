@@ -548,3 +548,236 @@ def test_web_orchestrate_and_agents(tmp_path):
         # 工具列表应包含 delegate
         tools = client.get("/api/web/tools").json()
         assert any(t["name"] == "delegate" for t in tools["tools"])
+
+
+# ---------------------------------------------------------------------------
+# 档案动态注册（ProfileRegistry）
+# ---------------------------------------------------------------------------
+def test_profile_registry_register_unregister(tmp_path):
+    from app.orchestrator.profiles import AgentProfile
+    from app.orchestrator.registry import ProfileRegistry, ProfileRegistryError
+
+    settings = Settings(
+        environment="test",
+        agent_profiles_file=str(tmp_path / "profiles.json"),
+        llm_provider="stub",
+    )
+    reg = ProfileRegistry(settings)
+    assert reg.is_builtin("researcher")
+    assert not reg.is_custom("researcher")
+
+    # 注册自定义档案
+    p = AgentProfile(
+        name="frontend",
+        description="前端专家：审查与修复前端代码",
+        system_prompt="你是一名资深前端工程师。",
+        allowed_tools=["file_read", "file_write"],
+    )
+    reg.register(p)
+    assert reg.is_custom("frontend")
+    assert "frontend" in reg.names()
+    assert reg.get("frontend") is p
+
+    # 内置档案不可覆盖 / 不可注销
+    with pytest.raises(ProfileRegistryError):
+        reg.register(AgentProfile(name="researcher", description="x", system_prompt="x"))
+    with pytest.raises(ProfileRegistryError):
+        reg.unregister("researcher")
+
+    # 未知名字回退 generalist
+    assert reg.get("not_exist").name == "generalist"
+
+    # 持久化：重建注册表从文件恢复
+    reg2 = ProfileRegistry(settings)
+    assert reg2.is_custom("frontend")
+    assert reg2.get("frontend").allowed_tools == ["file_read", "file_write"]
+
+    # 注销 + 持久化
+    assert reg2.unregister("frontend")
+    reg3 = ProfileRegistry(settings)
+    assert not reg3.is_custom("frontend")
+
+
+def test_profile_registry_corrupt_file_ignored(tmp_path):
+    from app.orchestrator.registry import ProfileRegistry
+
+    f = tmp_path / "profiles.json"
+    f.write_text("{ not valid json", encoding="utf-8")
+    settings = Settings(environment="test", agent_profiles_file=str(f), llm_provider="stub")
+    reg = ProfileRegistry(settings)
+    assert reg.names() == ["researcher", "analyst", "writer", "generalist"]  # 内置不受影响
+
+
+@pytest.mark.asyncio
+async def test_runner_uses_dynamic_profile(orch_settings, registry, tmp_path):
+    """动态注册的档案立即参与编排（planner 校验 + executor 执行）。"""
+    from app.orchestrator.profiles import AgentProfile
+    from app.orchestrator.registry import ProfileRegistry
+
+    llm = ScriptedLLM(plan_json='{"steps": [{"agent": "frontend", "task": "审查前端", "depends_on": []}]}')
+    reg = ProfileRegistry(orch_settings, profiles_file=str(tmp_path / "profiles.json"))
+    reg.register(
+        AgentProfile(
+            name="frontend",
+            description="前端专家",
+            system_prompt="你是一名资深前端工程师。",
+            allowed_tools=["calculator"],
+        )
+    )
+    runner = OrchestratorRunner(llm=llm, registry=registry, settings=orch_settings, profile_registry=reg)
+    result = await runner.run("审查前端代码")
+    assert result.agent_results[0].agent == "frontend"
+    assert result.agent_results[0].status == "SUCCEEDED"
+
+
+# ---------------------------------------------------------------------------
+# 委派结果持久化（SQLiteOrchestrationRepository）
+# ---------------------------------------------------------------------------
+def test_repository_save_and_query(tmp_path):
+    from app.orchestrator.repository import OrchestrationRecord, SQLiteOrchestrationRepository
+    from app.orchestrator.models import OrchestrationPlan, SubTask
+
+    repo = SQLiteOrchestrationRepository(f"sqlite:///{tmp_path}/orch.db")
+    rec = OrchestrationRecord(
+        session_id="s_test",
+        task="调研",
+        status="SUCCEEDED",
+        plan=OrchestrationPlan(
+            rationale="r",
+            steps=[SubTask(agent="researcher", task="查资料", depends_on=[])],
+        ),
+        final_answer="结论",
+        duration_ms=123.4,
+        trace_id="trace_1",
+    )
+    repo.save(rec)
+
+    got = repo.get(rec.run_id)
+    assert got is not None
+    assert got.task == "调研"
+    assert got.plan.steps[0].agent == "researcher"
+    assert got.final_answer == "结论"
+
+    by_session = repo.list_by_session("s_test")
+    assert len(by_session) == 1
+    assert by_session[0].run_id == rec.run_id
+
+    # parent 链查询
+    child = OrchestrationRecord(session_id="s_test", parent_run_id=rec.run_id, depth=2, task="子任务")
+    repo.save(child)
+    assert len(repo.list_children(rec.run_id)) == 1
+
+    # 级联删除
+    assert repo.delete_by_session("s_test") == 2
+    assert repo.list_by_session("s_test") == []
+
+
+@pytest.mark.asyncio
+async def test_runner_persists_with_session(orch_settings, registry, tmp_path):
+    """runner 注入 repository 后，编排结果按 session 持久化，嵌套编排挂 parent。"""
+    from app.orchestrator.context import current_run_id, orchestration_depth
+    from app.orchestrator.repository import SQLiteOrchestrationRepository
+
+    repo = SQLiteOrchestrationRepository(f"sqlite:///{tmp_path}/orch.db")
+    llm = ScriptedLLM()
+    runner = OrchestratorRunner(llm=llm, registry=registry, settings=orch_settings, repository=repo)
+    _registry_with_delegate(registry, runner)
+
+    result = await runner.run("检索资料并委派给 writer 细化", agents=["researcher"], session_id="s_outer")
+    assert result.run_id  # 持久化后回填
+
+    # 顶层记录
+    top = repo.get(result.run_id)
+    assert top is not None
+    assert top.session_id == "s_outer"
+    assert top.depth == 1
+    assert top.status == "SUCCEEDED"
+
+    # 嵌套编排（writer 孙级）也持久化，且 parent_run_id 指向顶层
+    children = repo.list_children(result.run_id)
+    assert len(children) >= 1
+    assert children[0].depth == 2
+    assert children[0].session_id == "s_outer"
+
+    # 按会话查询
+    runs = repo.list_by_session("s_outer")
+    assert len(runs) == 2
+    assert {r.depth for r in runs} == {1, 2}
+
+
+# ---------------------------------------------------------------------------
+# Web：档案增删 + 编排记录查询
+# ---------------------------------------------------------------------------
+def test_web_agent_crud_and_orchestration_records(tmp_path):
+    from fastapi.testclient import TestClient
+
+    import fakeredis.aioredis
+
+    from app.main import create_app
+
+    settings = Settings(
+        environment="test",
+        trace_enabled=False,
+        memory_enabled=False,
+        skills_enabled=False,
+        agent_mode="react",
+        llm_provider="stub",
+        database_url=f"sqlite:///{tmp_path}/web.db",
+        trace_file=str(tmp_path / "traces.jsonl"),
+        eval_run_dir=str(tmp_path / "runs"),
+        orchestrator_enabled=True,
+        orchestrator_planner_strategy="stub",
+        agent_profiles_file=str(tmp_path / "profiles.json"),
+    )
+    app = create_app(settings, redis=fakeredis.aioredis.FakeRedis(decode_responses=True))
+    with TestClient(app) as client:
+        # 注册自定义档案
+        r = client.post(
+            "/api/web/agents",
+            json={
+                "name": "frontend",
+                "description": "前端专家",
+                "system_prompt": "你是一名资深前端工程师。",
+                "allowed_tools": ["calculator"],
+            },
+        )
+        assert r.status_code == 200
+        assert "frontend" in r.json()["agents"]
+
+        # 内置档案不可覆盖
+        r409 = client.post(
+            "/api/web/agents",
+            json={"name": "researcher", "description": "x", "system_prompt": "x"},
+        )
+        assert r409.status_code == 409
+
+        # 列表带 builtin 标记
+        agents = client.get("/api/web/agents").json()
+        by_name = {a["name"]: a for a in agents["agents"]}
+        assert by_name["frontend"]["builtin"] is False
+        assert by_name["researcher"]["builtin"] is True
+
+        # 注销
+        assert client.delete("/api/web/agents/frontend").status_code == 200
+        assert client.delete("/api/web/agents/frontend").status_code == 404
+        # 内置不可注销
+        assert client.delete("/api/web/agents/researcher").status_code == 409
+
+        # 编排记录：执行一次编排后按会话可查
+        r = client.post("/api/web/orchestrate", json={"task": "查询北京天气", "agents": ["generalist"]})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["run_id"]
+
+        runs = client.get("/api/web/orchestrations").json()
+        assert runs["count"] >= 1
+        assert runs["runs"][0]["run_id"] == data["run_id"]
+
+        # 详情（含 plan + agent_results + children）
+        detail = client.get(f"/api/web/orchestrations/{data['run_id']}").json()
+        assert detail["task"] == "查询北京天气"
+        assert detail["agent_results"][0]["agent"] == "generalist"
+        assert "children" in detail
+
+        # 不存在的 run
+        assert client.get("/api/web/orchestrations/run_nope").status_code == 404

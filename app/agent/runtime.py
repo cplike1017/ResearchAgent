@@ -392,23 +392,30 @@ class AgentRuntime:
         session_id = session_id or f"session_{uuid4().hex[:12]}"
         turn_id = turn_id or f"turn_{uuid4().hex[:12]}"
 
-        if self.recorder is None or not self.recorder.enabled:
-            return await self._run_body(message, session_id, turn_id, user, extra_hooks)
+        # Stage 12：注入当前会话上下文（delegate 工具用它持久化编排结果）
+        from app.orchestrator.context import current_session_id
 
-        async with trace_span(
-            "agent.run",
-            "agent",
-            input={"message": message, "session_id": session_id, "user_id": user.user_id if user else None},
-            attributes={"session_id": session_id, "turn_id": turn_id},
-            recorder=self.recorder,
-        ) as span:
-            result = await self._run_body(message, session_id, turn_id, user, extra_hooks)
-            span.output = {
-                "answer": result.answer,
-                "steps": result.steps,
-                "tool_calls": len(result.tool_calls),
-            }
-            return result
+        token_session = current_session_id.set(session_id)
+        try:
+            if self.recorder is None or not self.recorder.enabled:
+                return await self._run_body(message, session_id, turn_id, user, extra_hooks)
+
+            async with trace_span(
+                "agent.run",
+                "agent",
+                input={"message": message, "session_id": session_id, "user_id": user.user_id if user else None},
+                attributes={"session_id": session_id, "turn_id": turn_id},
+                recorder=self.recorder,
+            ) as span:
+                result = await self._run_body(message, session_id, turn_id, user, extra_hooks)
+                span.output = {
+                    "answer": result.answer,
+                    "steps": result.steps,
+                    "tool_calls": len(result.tool_calls),
+                }
+                return result
+        finally:
+            current_session_id.reset(token_session)
 
     async def _run_body(self, message, session_id, turn_id, user, extra_hooks) -> AgentTurnResult:
         self._extra_hooks = extra_hooks

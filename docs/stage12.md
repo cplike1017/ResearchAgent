@@ -160,13 +160,24 @@ Web UI 的 Trace 树直接呈现该层级 —— 主管 → 员工 → 工具，
 ## 7. Web API
 
 ```bash
-# 直接编排（不经过主 agent）
+# 直接编排（不经过主 agent）；可携带 session_id 让编排记录挂到会话下
 POST /api/web/orchestrate
-{"task": "调研课题", "agents": ["researcher", "analyst"]}
-# → {plan, agent_results, final_answer, status, trace_id, trace}
+{"task": "调研课题", "agents": ["researcher", "analyst"], "session_id": "s_xxx"}
+# → {run_id, plan, agent_results, final_answer, status, trace_id, trace}
 
-# 子 agent 档案列表
+# 子 agent 档案列表（内置 + 动态注册，builtin 标记）
 GET /api/web/agents
+
+# 动态注册自定义档案（持久化到 agent_profiles_file，重启后仍可用）
+POST /api/web/agents
+{"name": "frontend", "description": "前端专家", "system_prompt": "…", "allowed_tools": ["file_read"]}
+
+# 注销自定义档案（内置档案不可注销）
+DELETE /api/web/agents/{name}
+
+# 编排记录查询（委派结果持久化到会话后的回放入口）
+GET /api/web/orchestrations?session_id=s_xxx   # 该会话的全部编排记录
+GET /api/web/orchestrations/{run_id}           # 单次编排详情（plan + 子 agent 结果 + 嵌套子编排 + Trace 树）
 ```
 
 ## 8. 配置
@@ -177,7 +188,35 @@ ORCHESTRATOR_PLANNER_STRATEGY=llm  # llm(模型分工) | stub(单步兜底)
 ORCHESTRATOR_MAX_STEPS=5         # 计划步骤数上限
 ORCHESTRATOR_MAX_PARALLEL=3      # 并行子 agent 上限
 ORCHESTRATOR_MAX_DEPTH=2         # 编排最大深度（1=仅主 agent 可委派；2=子 agent 也可再委派）
+AGENT_PROFILES_FILE=./data/agent_profiles.json  # 动态注册档案的持久化文件
 ```
+
+## 8.5 委派结果持久化到会话
+
+每次 `delegate` 编排（含嵌套子编排）的**结构化结果**写入 SQLite `orchestrations` 表
+（`app/orchestrator/repository.py`，与 Session/Checkpoint 同库不同表）：
+
+| 字段 | 内容 |
+|---|---|
+| run_id / parent_run_id / depth | 编排 ID、父编排（多级链）、层级 |
+| session_id | 所属会话（主 agent 由 AgentRuntime 注入；嵌套子编排继承同一会话） |
+| plan / agent_results / final_answer | 计划、各子 agent 答案/工具/耗时/状态、最终合成答案 |
+| trace_id / duration_ms | 关联完整 Trace 树、总耗时 |
+
+与"消息历史"的区别：消息里只有给 LLM 看的文本信封；orchestrations 表保存
+可查询、可回放的结构化记录 —— Web UI 可列出某会话的全部编排并展开单次详情。
+
+## 8.6 agent 档案动态注册
+
+内置 4 个档案（researcher/analyst/writer/generalist）随代码版本走，不可覆盖；
+`ProfileRegistry`（`app/orchestrator/registry.py`）支持运行时注册自定义档案：
+
+- `register()` 校验：名字非空、不与内置同名（内置人设不可篡改）；重复注册覆盖
+- `unregister()` 注销自定义档案；内置不可注销
+- 自定义档案**立即参与编排**：planner 的 LLM 分工能看到它，executor 按它的
+  人设 + 工具白名单执行，同样受 delegate 深度控制
+- 持久化：写入 `AGENT_PROFILES_FILE`（JSON），重启后自动加载；损坏文件静默忽略
+
 
 ## 9. 多级编排（子 agent 嵌套委派）
 

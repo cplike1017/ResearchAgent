@@ -234,6 +234,7 @@ class WebOrchestrateRequest(BaseModel):
     task: str = Field(description="要编排的任务")
     agents: list[str] | None = Field(default=None, description="指定子 Agent 名单；缺省自动分工")
     context: str = Field(default="", description="背景信息")
+    session_id: str | None = Field(default=None, description="关联会话（编排结果持久化挂到该会话）")
 
 
 @router.post("/orchestrate")
@@ -241,7 +242,9 @@ async def web_orchestrate(req: WebOrchestrateRequest, request: Request) -> dict:
     runtime = _get_runtime(request)
     if runtime.orchestrator is None:
         raise HTTPException(status_code=503, detail="编排器未启用（ORCHESTRATOR_ENABLED=false）")
-    result = await runtime.orchestrator.run(req.task, agents=req.agents, context=req.context)
+    result = await runtime.orchestrator.run(
+        req.task, agents=req.agents, context=req.context, session_id=req.session_id or ""
+    )
     trace_tree = None
     if result.trace_id:
         try:
@@ -249,6 +252,7 @@ async def web_orchestrate(req: WebOrchestrateRequest, request: Request) -> dict:
         except Exception:
             trace_tree = None
     return {
+        "run_id": result.run_id,
         "task": result.task,
         "plan": result.plan.model_dump(),
         "agent_results": [r.model_dump() for r in result.agent_results],
@@ -262,9 +266,11 @@ async def web_orchestrate(req: WebOrchestrateRequest, request: Request) -> dict:
 
 @router.get("/agents")
 async def web_agents(request: Request) -> dict:
-    """列出可用的子 Agent 档案。"""
-    from app.orchestrator.profiles import BUILTIN_PROFILES
-
+    """列出可用的子 Agent 档案（内置 + 动态注册）。"""
+    runtime = _get_runtime(request)
+    if runtime.orchestrator is None:
+        return {"agents": [], "count": 0}
+    reg = runtime.orchestrator.profile_registry
     return {
         "agents": [
             {
@@ -272,10 +278,133 @@ async def web_agents(request: Request) -> dict:
                 "description": p.description,
                 "allowed_tools": p.allowed_tools,
                 "max_steps": p.max_steps,
+                "builtin": reg.is_builtin(p.name),
             }
-            for p in BUILTIN_PROFILES
+            for p in reg.all()
         ],
-        "count": len(BUILTIN_PROFILES),
+        "count": len(reg.all()),
+    }
+
+
+class WebAgentRegisterRequest(BaseModel):
+    """动态注册子 Agent 档案。"""
+
+    name: str = Field(description="档案名（不可与内置档案同名）")
+    description: str = Field(default="", description="职责说明（给编排规划器看）")
+    system_prompt: str = Field(description="子 agent 系统提示（人设 + 工作规范）")
+    allowed_tools: list[str] | None = Field(default=None, description="工具白名单；None = 全部工具")
+    max_steps: int = Field(default=6, description="子 agent 循环步数上限")
+
+
+@router.post("/agents")
+async def web_agents_register(req: WebAgentRegisterRequest, request: Request) -> dict:
+    """动态注册子 Agent 档案（持久化到 agent_profiles_file，重启后仍可用）。"""
+    from app.orchestrator.profiles import AgentProfile
+    from app.orchestrator.registry import ProfileRegistryError
+
+    runtime = _get_runtime(request)
+    if runtime.orchestrator is None:
+        raise HTTPException(status_code=503, detail="编排器未启用")
+    profile = AgentProfile(
+        name=req.name.strip(),
+        description=req.description,
+        system_prompt=req.system_prompt,
+        allowed_tools=req.allowed_tools,
+        max_steps=max(1, min(30, req.max_steps)),
+    )
+    try:
+        runtime.orchestrator.profile_registry.register(profile)
+    except ProfileRegistryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {
+        "registered": profile.name,
+        "agents": [p.name for p in runtime.orchestrator.profile_registry.all()],
+    }
+
+
+@router.delete("/agents/{name}")
+async def web_agents_unregister(name: str, request: Request) -> dict:
+    """注销动态注册的档案（内置档案不可注销）。"""
+    from app.orchestrator.registry import ProfileRegistryError
+
+    runtime = _get_runtime(request)
+    if runtime.orchestrator is None:
+        raise HTTPException(status_code=503, detail="编排器未启用")
+    try:
+        removed = runtime.orchestrator.profile_registry.unregister(name)
+    except ProfileRegistryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"档案不存在: {name}")
+    return {"unregistered": name}
+
+
+# ---------------------------------------------------------------------------
+# 编排结果查询（委派结果持久化到会话后的回放入口）
+# ---------------------------------------------------------------------------
+@router.get("/orchestrations")
+async def web_orchestrations(request: Request, session_id: str | None = None) -> dict:
+    """查询编排记录：?session_id=xxx 按会话查；缺省返回最近记录。"""
+    runtime = _get_runtime(request)
+    if runtime.orchestrator is None or runtime.orchestrator.repository is None:
+        return {"runs": [], "count": 0}
+    repo = runtime.orchestrator.repository
+    runs = repo.list_by_session(session_id, limit=50) if session_id else repo.list_recent(limit=20)
+    return {
+        "runs": [
+            {
+                "run_id": r.run_id,
+                "session_id": r.session_id,
+                "parent_run_id": r.parent_run_id,
+                "depth": r.depth,
+                "task": r.task,
+                "status": r.status,
+                "final_answer": r.final_answer[:200],
+                "duration_ms": r.duration_ms,
+                "trace_id": r.trace_id,
+                "created_at": r.created_at,
+                "agent_count": len(r.agent_results),
+            }
+            for r in runs
+        ],
+        "count": len(runs),
+    }
+
+
+@router.get("/orchestrations/{run_id}")
+async def web_orchestration_detail(run_id: str, request: Request) -> dict:
+    """单次编排详情（计划 + 子 agent 结果 + 嵌套子编排 + Trace 树）。"""
+    runtime = _get_runtime(request)
+    if runtime.orchestrator is None or runtime.orchestrator.repository is None:
+        raise HTTPException(status_code=404, detail="编排存储未启用")
+    record = runtime.orchestrator.repository.get(run_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"编排记录不存在: {run_id}")
+    children = runtime.orchestrator.repository.list_children(run_id)
+    trace_tree = None
+    if record.trace_id:
+        try:
+            trace_tree = request.app.state.recorder.build_tree(record.trace_id)
+        except Exception:
+            trace_tree = None
+    return {
+        "run_id": record.run_id,
+        "session_id": record.session_id,
+        "parent_run_id": record.parent_run_id,
+        "depth": record.depth,
+        "task": record.task,
+        "status": record.status,
+        "plan": record.plan.model_dump(),
+        "agent_results": [r.model_dump() for r in record.agent_results],
+        "final_answer": record.final_answer,
+        "duration_ms": record.duration_ms,
+        "trace_id": record.trace_id,
+        "trace": trace_tree,
+        "created_at": record.created_at,
+        "children": [
+            {"run_id": c.run_id, "depth": c.depth, "status": c.status, "task": c.task[:100]}
+            for c in children
+        ],
     }
 
 
@@ -361,6 +490,9 @@ async def web_session_delete(session_id: str, request: Request) -> dict:
         conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
         conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
         conn.commit()
+        # 编排记录级联删除（独立连接，同样在 orchestrations 表上删）
+        if runtime.orchestrator is not None and runtime.orchestrator.repository is not None:
+            runtime.orchestrator.repository.delete_by_session(session_id)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"删除失败: {exc}")
     return {"deleted": session_id}

@@ -17,14 +17,17 @@ Web UI 的 Trace 树可完整展示"主管 → 员工 → 工具调用"。
 """
 import asyncio
 import time
+from uuid import uuid4
 
 from app.config import Settings, get_settings
 from app.llm.client import BaseLLMClient
-from app.orchestrator.context import orchestration_depth
+from app.orchestrator.context import current_run_id, orchestration_depth
 from app.orchestrator.executor import SubAgentExecutor
 from app.orchestrator.models import AgentRunResult, OrchestrationPlan, OrchestrationResult
 from app.orchestrator.planner import OrchestratorPlanner
-from app.orchestrator.profiles import AgentProfile, BUILTIN_PROFILES, get_profile
+from app.orchestrator.profiles import AgentProfile
+from app.orchestrator.registry import ProfileRegistry, _static_registry
+from app.orchestrator.repository import OrchestrationRecord, SQLiteOrchestrationRepository
 from app.tools.registry import ToolRegistry
 from app.tracing.context import current_trace_id
 from app.tracing.recorder import TraceRecorder
@@ -55,13 +58,27 @@ class OrchestratorRunner:
         settings: Settings | None = None,
         recorder: TraceRecorder | None = None,
         profiles: list[AgentProfile] | None = None,
+        profile_registry: "ProfileRegistry | None" = None,
+        repository: "SQLiteOrchestrationRepository | None" = None,
     ) -> None:
+        """构造编排器。
+
+        :param profiles: 兼容旧参数：显式档案列表（与 profile_registry 二选一）
+        :param profile_registry: 档案注册表（内置 + 动态自定义；缺省新建默认注册表）
+        :param repository: 编排结果仓库（None = 不持久化编排记录）
+        """
         self.settings = settings or get_settings()
         self.llm = llm
         self.registry = registry
         self.recorder = recorder
-        self.profiles = profiles or BUILTIN_PROFILES
-        self.planner = OrchestratorPlanner(self.settings, llm=llm)
+        if profile_registry is not None:
+            self.profile_registry = profile_registry
+        elif profiles is not None:
+            self.profile_registry = _static_registry(profiles)
+        else:
+            self.profile_registry = ProfileRegistry(self.settings)
+        self.repository = repository
+        self.planner = OrchestratorPlanner(self.settings, llm=llm, profile_registry=self.profile_registry)
         self.executor = SubAgentExecutor(
             llm=llm,
             master_registry=registry,
@@ -76,6 +93,9 @@ class OrchestratorRunner:
         agents: list[str] | None = None,
         context: str = "",
         max_parallel: int | None = None,
+        *,
+        session_id: str = "",
+        parent_run_id: str | None = None,
     ) -> OrchestrationResult:
         """执行一次多 Agent 编排（支持嵌套：子 agent 也可再委派）。
 
@@ -83,16 +103,50 @@ class OrchestratorRunner:
         :param agents: 显式指定子 agent 名单（None = 让 planner 自动分工）
         :param context: 主 agent 提供的背景信息（拼进子 agent 的任务）
         :param max_parallel: 并行上限（默认取配置 orchestrator_max_parallel）
+        :param session_id: 所属会话（持久化编排记录用；空则不关联会话）
+        :param parent_run_id: 父编排 run_id（多级编排内部自动传递，无需手动传）
 
         多级编排：进入时 depth+1、退出时恢复。深度由 ContextVar 追踪，
         并行子 agent 的嵌套委派互不干扰；超限由 delegate 工具可见性
         （叶子层无 delegate）与 handler 兜底双重防御。
+
+        持久化：注入 repository 时，每次编排（含嵌套子编排）的结果写入
+        orchestrations 表，parent_run_id 关联多级编排的父子关系。
         """
-        token = orchestration_depth.set(orchestration_depth.get() + 1)
+        depth = orchestration_depth.get() + 1
+        token = orchestration_depth.set(depth)
+        run_id = f"run_{uuid4().hex[:12]}"
+        parent = parent_run_id or current_run_id.get()  # 嵌套时指向外层 run_id
+        token_run = current_run_id.set(run_id)
+        # 会话透传：嵌套编排（子 agent 再 delegate）的 handler 从 contextvar 读到
+        # 同一个 session_id，整棵编排树都挂到同一会话下
+        token_session = None
+        if session_id:
+            from app.orchestrator.context import current_session_id
+
+            token_session = current_session_id.set(session_id)
         try:
-            return await self._run(task, agents, context, max_parallel)
+            result = await self._run(task, agents, context, max_parallel)
         finally:
             orchestration_depth.reset(token)
+            current_run_id.reset(token_run)
+            if token_session is not None:
+                current_session_id.reset(token_session)
+        # 持久化编排记录（repository 注入时；失败不影响编排结果本身）
+        if self.repository is not None:
+            try:
+                record = OrchestrationRecord.from_result(
+                    result,
+                    session_id=session_id,
+                    parent_run_id=parent,
+                    depth=depth,
+                )
+                record.run_id = run_id
+                self.repository.save(record)
+                result.run_id = run_id
+            except Exception:
+                pass
+        return result
 
     async def _run(
         self,
@@ -167,7 +221,7 @@ class OrchestratorRunner:
             async def _run_step(i: int) -> None:
                 async with semaphore:
                     step = plan.steps[i]
-                    profile = get_profile(step.agent)
+                    profile = self.profile_registry.get(step.agent)
                     dep_context = _build_context(results, step.depends_on)
                     full_context = "\n".join(filter(None, [context, dep_context]))
                     results[i] = await self.executor.execute(profile, step.task, full_context)

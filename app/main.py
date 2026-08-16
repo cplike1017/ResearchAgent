@@ -64,6 +64,8 @@ def build_web_runtime(settings: Settings, recorder: TraceRecorder) -> AgentRunti
     # Stage 12：多 Agent 编排器（注入 runtime 后自动注册 delegate 工具）
     orchestrator = None
     if settings.orchestrator_enabled:
+        from app.orchestrator.registry import ProfileRegistry
+        from app.orchestrator.repository import SQLiteOrchestrationRepository
         from app.orchestrator.runner import OrchestratorRunner
 
         orchestrator = OrchestratorRunner(
@@ -71,6 +73,8 @@ def build_web_runtime(settings: Settings, recorder: TraceRecorder) -> AgentRunti
             registry=registry,
             settings=settings,
             recorder=recorder,
+            profile_registry=ProfileRegistry(settings),  # 内置 + 动态注册档案（JSON 持久化）
+            repository=SQLiteOrchestrationRepository(settings.database_url),  # 编排结果持久化
         )
 
     return AgentRuntime(
