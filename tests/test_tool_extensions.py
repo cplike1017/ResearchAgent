@@ -153,3 +153,51 @@ def test_generalist_sees_everything(monkeypatch, tmp_path):
     tools = {t.name for t in executor._filtered_registry(get_profile("generalist")).all()}
     assert "arxiv_search" in tools and "list_files" in tools
     assert "append_note" in tools and "search_files" in tools
+
+
+# ---------------------------------------------------------------------------
+# 工具描述引导：何时用/何时不用/失败怎么办 + 人设纪律注入
+# ---------------------------------------------------------------------------
+def test_tool_descriptions_have_guidance():
+    """关键工具的 description 必须包含决策引导（何时用/失败怎么办）。"""
+    registry = build_default_registry()
+    desc = {t.name: t.description for t in registry.all()}
+
+    # 易混淆工具对：必须互相指明替代关系
+    assert "extract_web" in desc["http_get"]  # http_get 描述里指明换 extract_web
+    assert "http_get_json" in desc["http_get"]  # 指明 JSON 用 http_get_json
+    assert "web_search" in desc["arxiv_search"]  # arxiv 失败换 web_search
+    assert "analyze_data" in desc["run_code"]  # run_code 描述里指明简单统计用 analyze_data
+    assert "append_note" in desc["file_write"]  # file_write 指明草稿用 append_note
+    assert "list_files" in desc["file_read"]  # file_read 指明不确定文件先 list_files
+
+    # 失败引导：核心工具描述应包含"失败怎么办"或"不要重试"语义
+    assert "失败" in desc["web_search"]
+    assert "失败" in desc["http_get"]
+    assert "失败" in desc["http_get_json"]
+    assert "重试" in desc["http_get"] or "重试" in desc["http_get_json"]
+
+    # 决策边界：何时用/何时不用
+    assert "何时用" in desc["extract_web"]
+    assert "何时不用" in desc["run_code"]
+
+
+def test_subagent_prompts_have_tool_discipline():
+    """所有内置子 agent 人设都注入工具使用纪律。"""
+    from app.orchestrator.profiles import BUILTIN_PROFILES
+
+    for p in BUILTIN_PROFILES:
+        assert "工具使用纪律" in p.system_prompt
+        assert "原样重试超过 1 次" in p.system_prompt
+        assert "不要并行调用同一个工具多次" in p.system_prompt
+
+
+def test_main_agent_system_prompt_has_discipline():
+    """主 agent 的 Context Builder system prompt 含工具纪律。"""
+    from app.agent.context_builder import ContextBuilder
+
+    cb = ContextBuilder(Settings(environment="test", llm_provider="stub"))
+    prompt = cb._build_system_prompt(None, None)
+    assert "工具使用纪律" in prompt
+    assert "原样重试超过 1 次" in prompt
+    assert "不要并行调用同一个工具多次" in prompt
