@@ -1,5 +1,5 @@
 """
-Stage 12 测试：多 Agent 编排（planner / executor / runner / delegate 工具 / Web 端点 / Trace 嵌套）。
+Stage 12 测试：多 Agent 编排（planner / executor / runner / delegate 工具 / Web 端点 / Trace 嵌套 / 多级编排）。
 
 全部离线：脚本化 LLM（ScriptedLLM）精确控制规划、子 agent、合成三路输出。
 """
@@ -8,7 +8,7 @@ import pytest
 from app.agent.runtime import AgentRuntime
 from app.config import Settings
 from app.errors import LLMError
-from app.llm.client import BaseLLMClient, LLMResponse
+from app.llm.client import BaseLLMClient, LLMResponse, ToolCallRequest
 from app.orchestrator.executor import SubAgentExecutor
 from app.orchestrator.planner import OrchestratorPlanner
 from app.orchestrator.profiles import get_profile
@@ -19,12 +19,13 @@ from app.tracing.recorder import TraceRecorder
 
 
 # ---------------------------------------------------------------------------
-# 脚本化 LLM：按消息内容分流（规划 / 合成 / 子 agent）
+# 脚本化 LLM：按消息内容分流（规划 / 合成 / 子 agent / 嵌套委派）
 # ---------------------------------------------------------------------------
 class ScriptedLLM(BaseLLMClient):
     """按 prompt 特征分发：
         - 含「可用子 Agent 档案」 → 规划（返回 plan_json）
         - 含「各子 Agent 结果」   → 合成（返回 synthesize_text）
+        - 含「委派给」           → 子 agent 发起 delegate 工具调用（多级编排）
         - 其余                   → 子 agent 回合（返回子 agent 答案；命中 fail_tasks 抛错）
     """
 
@@ -45,7 +46,7 @@ class ScriptedLLM(BaseLLMClient):
             return LLMResponse(content=self.synthesize_text, model=self.model)
         if any(t in text for t in self.fail_tasks):
             raise LLMError(f"scripted failure: {self.fail_tasks}")
-        # 子 agent 回合：直接最终回答（不调用工具）
+        # 子 agent 回合（先取人设标记）
         system = messages[0].get("content", "") if messages else ""
         marker = "generalist"
         for keyword, name in (
@@ -55,6 +56,22 @@ class ScriptedLLM(BaseLLMClient):
         ):
             if keyword in system:
                 marker = name
+        # 已有工具结果（delegate 已返回）→ 收尾回答，绝不重复委派
+        if any(m.get("role") == "tool" for m in messages):
+            return LLMResponse(content=f"{self.sub_answer}({marker})", model=self.model)
+        # 命中「委派给」→ 发起 delegate 工具调用（多级编排）
+        if "委派给" in text:
+            return LLMResponse(
+                tool_calls=[
+                    ToolCallRequest(
+                        id="call_delegate_nested",
+                        name="delegate",
+                        arguments={"task": "细化子任务", "agents": ["writer"]},
+                    )
+                ],
+                model=self.model,
+            )
+        # 子 agent 回合：直接最终回答（不调用工具）
         return LLMResponse(content=f"{self.sub_answer}({marker})", model=self.model)
 
 
@@ -337,6 +354,151 @@ async def test_orchestrator_trace_nesting(tmp_path, registry):
     # 每个子 agent 内部有 llm_call
     for a in agent_runs:
         assert any(c["name"] == "llm_call" for c in a["children"])
+
+
+# ---------------------------------------------------------------------------
+# 多级编排（子 agent 嵌套委派）
+# ---------------------------------------------------------------------------
+def _registry_with_delegate(registry, runner) -> None:
+    """把 delegate 工具注入测试 registry（生产环境由 AgentRuntime 注入）。"""
+    from app.orchestrator.tool import build_delegate_tool
+
+    registry.register(build_delegate_tool(runner), overwrite=True)
+
+
+@pytest.mark.asyncio
+async def test_delegate_visibility_by_depth(orch_settings, registry):
+    """delegate 可见性随深度变化：depth < max_depth 可见（可再委派），叶子层不可见。
+
+    且不受档案白名单限制（编排层元能力）——researcher 也能看到 delegate。
+    """
+    from app.orchestrator.context import orchestration_depth
+
+    runner = OrchestratorRunner(llm=ScriptedLLM(), registry=registry, settings=orch_settings)
+    _registry_with_delegate(registry, runner)
+    executor = SubAgentExecutor(llm=ScriptedLLM(), master_registry=registry, settings=orch_settings)
+
+    # depth=0（主 agent 侧）：可见
+    assert "delegate" in {t.name for t in executor._filtered_registry(get_profile("generalist")).all()}
+    # 白名单豁免：researcher 也能看到 delegate（委派是元能力）
+    assert "delegate" in {t.name for t in executor._filtered_registry(get_profile("researcher")).all()}
+
+    # depth=1（max_depth=2）：仍可见，子 agent 可再委派
+    token = orchestration_depth.set(1)
+    try:
+        tools1 = {t.name for t in executor._filtered_registry(get_profile("researcher")).all()}
+        assert "delegate" in tools1
+    finally:
+        orchestration_depth.reset(token)
+
+    # depth=2（叶子层）：delegate 被物理移除
+    token2 = orchestration_depth.set(2)
+    try:
+        tools2 = {t.name for t in executor._filtered_registry(get_profile("researcher")).all()}
+        assert "delegate" not in tools2
+    finally:
+        orchestration_depth.reset(token2)
+
+
+@pytest.mark.asyncio
+async def test_nested_delegation_two_levels(orch_settings, registry):
+    """两级编排：researcher 子 agent 在任务中再委派给 writer（孙级），结果逐层回传。"""
+    llm = ScriptedLLM()
+    runner = OrchestratorRunner(llm=llm, registry=registry, settings=orch_settings)
+    _registry_with_delegate(registry, runner)
+
+    # 显式指定 researcher：researcher 的任务含「委派给」→ ScriptedLLM 触发 delegate 给 writer
+    result = await runner.run("检索资料并委派给 writer 细化", agents=["researcher"])
+    assert result.status == "SUCCEEDED"
+    # 单步编排：最终答案 = researcher 的回答（含其内部委派后的收尾）
+    assert result.agent_results[0].agent == "researcher"
+    assert result.agent_results[0].tool_calls  # researcher 内部调用了 delegate
+    assert any(t["name"] == "delegate" for t in result.agent_results[0].tool_calls)
+
+    # writer 确实作为孙级执行过（llm.calls 中出现 writer 人设的 system 消息）
+    writer_system_seen = any(
+        any("报告写手" in str(m.get("content") or "") for m in msgs)
+        for msgs, _ in llm.calls
+    )
+    assert writer_system_seen
+
+
+@pytest.mark.asyncio
+async def test_depth_limit_blocks_nested_delegation(orch_settings, registry):
+    """max_depth=1：子 agent 看不到 delegate，委派调用变成失败的工具调用，孙级不执行。"""
+    from app.orchestrator.context import orchestration_depth
+
+    settings = orch_settings.model_copy(update={"orchestrator_max_depth": 1})
+    llm = ScriptedLLM()
+    runner = OrchestratorRunner(llm=llm, registry=registry, settings=settings)
+    _registry_with_delegate(registry, runner)
+
+    # 直接验证叶子层过滤：depth=1 且 max_depth=1 → 无 delegate
+    executor = SubAgentExecutor(llm=llm, master_registry=registry, settings=settings)
+    token = orchestration_depth.set(1)
+    try:
+        tools = {t.name for t in executor._filtered_registry(get_profile("generalist")).all()}
+        assert "delegate" not in tools
+    finally:
+        orchestration_depth.reset(token)
+
+    # 端到端：researcher 试图委派 → delegate 未注册 → 工具调用失败 → 子 agent 收尾完成
+    result = await runner.run("检索资料并委派给 writer 细化", agents=["researcher"])
+    assert result.status == "SUCCEEDED"
+    # 孙级 writer 从未执行（没有 writer 人设的调用）
+    writer_system_seen = any(
+        any("报告写手" in str(m.get("content") or "") for m in msgs)
+        for msgs, _ in llm.calls
+    )
+    assert not writer_system_seen
+
+
+@pytest.mark.asyncio
+async def test_trace_nesting_two_levels(tmp_path, registry):
+    """Trace 树呈现两级编排：orchestrator.run(depth1) → agent.run → delegate → orchestrator.run(depth2)。"""
+    settings = Settings(
+        environment="test",
+        trace_enabled=True,
+        trace_file=str(tmp_path / "traces.jsonl"),
+        agent_mode="react",
+        llm_provider="stub",
+        orchestrator_planner_strategy="llm",
+        orchestrator_max_depth=2,
+    )
+    recorder = TraceRecorder(settings.trace_file, enabled=True, capture_content=False)
+    llm = ScriptedLLM()
+    runner = OrchestratorRunner(llm=llm, registry=registry, settings=settings, recorder=recorder)
+    _registry_with_delegate(registry, runner)
+
+    result = await runner.run("检索资料并委派给 writer 细化", agents=["researcher"])
+    assert result.status == "SUCCEEDED"
+    tree = recorder.build_tree(result.trace_id)
+    roots = tree["spans"]
+    assert len(roots) == 1 and roots[0]["name"] == "orchestrator.run"
+    assert roots[0]["attributes"].get("depth") == 1
+
+    def find(nodes, name):
+        for n in nodes:
+            if n["name"] == name:
+                return n
+            hit = find(n.get("children", []), name)
+            if hit:
+                return hit
+        return None
+
+    # 第一层 researcher agent.run
+    level1_agent = find(roots[0]["children"], "agent.run")
+    assert level1_agent is not None
+    # 其下 delegate 工具调用里嵌套了第二层 orchestrator.run(depth=2)
+    delegate_exec = find(level1_agent["children"], "tool.execute")
+    assert delegate_exec is not None
+    nested = find(delegate_exec["children"], "orchestrator.run")
+    assert nested is not None
+    assert nested["attributes"].get("depth") == 2
+    # 第二层里有 writer 子 agent
+    level2_agent = find(nested["children"], "agent.run")
+    assert level2_agent is not None
+    assert level2_agent["attributes"].get("agent_profile") == "writer"
 
 
 # ---------------------------------------------------------------------------

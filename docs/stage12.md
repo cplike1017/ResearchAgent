@@ -176,9 +176,43 @@ ORCHESTRATOR_ENABLED=true        # 编排总开关
 ORCHESTRATOR_PLANNER_STRATEGY=llm  # llm(模型分工) | stub(单步兜底)
 ORCHESTRATOR_MAX_STEPS=5         # 计划步骤数上限
 ORCHESTRATOR_MAX_PARALLEL=3      # 并行子 agent 上限
+ORCHESTRATOR_MAX_DEPTH=2         # 编排最大深度（1=仅主 agent 可委派；2=子 agent 也可再委派）
 ```
 
-## 9. 运行
+## 9. 多级编排（子 agent 嵌套委派）
+
+默认编排只有一层：主 agent 委派 → 子 agent 执行。多级编排让**子 agent 也可以再往下委派**（如 researcher 检索时发现需要深度分析，再 delegate 给 analyst）。
+
+### 深度控制（递归有界）
+
+```
+主 agent ──delegate──> 子 agent（depth=1）──delegate──> 孙 agent（depth=2，叶子）
+```
+
+- 深度由 `ContextVar`（`app/orchestrator/context.py`）在 `runner.run()` 进入/退出时 +1/-1 追踪；
+  ContextVar 是任务局部的，**并行子 agent 各自嵌套委派互不干扰**。
+- **可见性控制**（第一道防线）：子 agent 能否看到 delegate 工具由深度决定 ——
+  `depth < ORCHESTRATOR_MAX_DEPTH` 保留 delegate（可再委派），叶子层物理移除，
+  模型根本不会产生嵌套调用。
+- **handler 兜底**（第二道防线）：即使可见性被绕过，`delegate` 的 handler 在深度
+  超限时直接返回 FAILED，拒绝再委派。
+- **白名单豁免**：delegate 是编排层的"元能力"，不属于任何档案的工具清单，
+  不受档案白名单限制 —— 任何子 agent 在非叶子层都可再委派。
+
+### 嵌套时 Trace 树
+
+```text
+orchestrator.run [depth=1]            ← 主编排
+└── agent.run [researcher]            ← 子 agent
+    ├── llm_call
+    ├── tool.execute [web_search]
+    └── tool.execute [delegate]       ← 子 agent 再委派
+        └── orchestrator.run [depth=2] ← 嵌套编排（孙级）
+            └── agent.run [analyst]
+                └── tool.execute [run_code]
+```
+
+## 10. 运行
 
 ```bash
 # Demo（真实 LLM 效果最佳；无 Key 降级 stub）
@@ -191,10 +225,11 @@ pytest tests/test_orchestrator.py -q
 python -m uvicorn app.main:app --port 8000
 ```
 
-## 10. 教学点总结
+## 11. 教学点总结
 
 1. **编排与执行的分离**：Planner 只负责"拆"，Executor 只负责"干"，Runner 只负责"调度与合成"。
 2. **隔离即安全**：子 agent 的能力边界由工具白名单物理限定，而非提示词自觉。
 3. **失败隔离**：一个 worker 挂了不拖垮整个团队 —— 结果结构化、状态可传播。
 4. **可观测**：编排天然产生嵌套 span，Trace 树就是团队协作的组织架构图。
-5. **递归有界**：delegate 对子 agent 不可见，编排深度恒为 1（后续可扩展多级编排）。
+5. **递归有界**：多级编排靠"深度 ContextVar + 叶子层工具移除 + handler 兜底"三层防御，
+   编排深度恒 ≤ ORCHESTRATOR_MAX_DEPTH，不会无限嵌套。

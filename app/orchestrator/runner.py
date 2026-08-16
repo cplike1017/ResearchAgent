@@ -20,6 +20,7 @@ import time
 
 from app.config import Settings, get_settings
 from app.llm.client import BaseLLMClient
+from app.orchestrator.context import orchestration_depth
 from app.orchestrator.executor import SubAgentExecutor
 from app.orchestrator.models import AgentRunResult, OrchestrationPlan, OrchestrationResult
 from app.orchestrator.planner import OrchestratorPlanner
@@ -76,13 +77,30 @@ class OrchestratorRunner:
         context: str = "",
         max_parallel: int | None = None,
     ) -> OrchestrationResult:
-        """执行一次多 Agent 编排。
+        """执行一次多 Agent 编排（支持嵌套：子 agent 也可再委派）。
 
         :param task:   用户任务
         :param agents: 显式指定子 agent 名单（None = 让 planner 自动分工）
         :param context: 主 agent 提供的背景信息（拼进子 agent 的任务）
         :param max_parallel: 并行上限（默认取配置 orchestrator_max_parallel）
+
+        多级编排：进入时 depth+1、退出时恢复。深度由 ContextVar 追踪，
+        并行子 agent 的嵌套委派互不干扰；超限由 delegate 工具可见性
+        （叶子层无 delegate）与 handler 兜底双重防御。
         """
+        token = orchestration_depth.set(orchestration_depth.get() + 1)
+        try:
+            return await self._run(task, agents, context, max_parallel)
+        finally:
+            orchestration_depth.reset(token)
+
+    async def _run(
+        self,
+        task: str,
+        agents: list[str] | None,
+        context: str,
+        max_parallel: int | None,
+    ) -> OrchestrationResult:
         start = time.perf_counter()
         plan = await self.planner.plan(task, agents=agents)
 
@@ -92,8 +110,8 @@ class OrchestratorRunner:
         async with trace_span(
             "orchestrator.run",
             "orchestrator",
-            input={"task": task, "agents": agents, "steps": len(plan.steps)},
-            attributes={"agents": agents, "steps": len(plan.steps)},
+            input={"task": task, "agents": agents, "steps": len(plan.steps), "depth": orchestration_depth.get()},
+            attributes={"agents": agents, "steps": len(plan.steps), "depth": orchestration_depth.get()},
             recorder=self.recorder,
         ) as span:
             result = await self._run_impl(task, plan, context, max_parallel, start)

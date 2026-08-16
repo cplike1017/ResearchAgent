@@ -151,6 +151,8 @@ class Settings(BaseSettings):
     orchestrator_max_steps: int = 5
     # 并行执行子 agent 的数量上限
     orchestrator_max_parallel: int = 3
+    # 编排最大深度（多级编排）：1 = 仅主 agent 可委派；2 = 子 agent 也可再委派（孙级）
+    orchestrator_max_depth: int = 2
 
     # ---------- Skill 系统 ----------
     # 技能目录（skills/ 下每个子目录一个技能，含 SKILL.md）

@@ -15,6 +15,7 @@ import time
 
 from app.config import Settings, get_settings
 from app.llm.client import BaseLLMClient
+from app.orchestrator.context import orchestration_depth
 from app.orchestrator.models import AgentRunResult
 from app.orchestrator.profiles import AgentProfile
 from app.tools.gateway import ToolGateway
@@ -43,12 +44,20 @@ class SubAgentExecutor:
     def _filtered_registry(self, profile: AgentProfile) -> ToolRegistry:
         """按档案白名单过滤工具（None = 全部）。未知工具名静默跳过。
 
-        始终排除 delegate 工具：子 agent 不应再往下委派（防止编排递归）。
+        delegate 特殊处理（多级编排核心）：
+            - 它是编排层的"元能力"，不属于任何档案的工具清单，因此不受
+              档案白名单限制 —— 任何子 agent 在非叶子层都可以再向下委派；
+            - 可见性只由深度控制：depth < orchestrator_max_depth 保留，
+              叶子层（depth >= max_depth）物理移除，模型根本不会产生
+              嵌套调用。这是"递归有界"的第一道防线。
         """
+        allow_delegate = orchestration_depth.get() < self.settings.orchestrator_max_depth
         registry = ToolRegistry()
         for tool in self.master_registry.all():
             if tool.name == "delegate":
-                continue  # 禁止子 agent 嵌套委派
+                if allow_delegate:
+                    registry.register(tool)
+                continue
             if profile.allowed_tools is not None and tool.name not in profile.allowed_tools:
                 continue
             registry.register(tool)

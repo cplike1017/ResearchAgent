@@ -33,6 +33,22 @@ def build_delegate_tool(orchestrator: OrchestratorRunner) -> ToolDefinition:
     """构造 delegate 工具（闭包绑定编排器实例）。"""
 
     async def handler(task: str, agents: list[str] | None = None, context: str = "") -> dict:
+        # 第二道防线：即使工具可见性被绕过，深度超限也拒绝委派
+        from app.orchestrator.context import orchestration_depth
+
+        if orchestration_depth.get() >= orchestrator.settings.orchestrator_max_depth:
+            return {
+                "status": "FAILED",
+                "error": (
+                    f"编排深度已达上限（max_depth={orchestrator.settings.orchestrator_max_depth}），"
+                    "本层子 Agent 不能再向下委派。请在本层完成任务。"
+                ),
+                "plan": {"rationale": "", "steps": []},
+                "agent_results": [],
+                "final_answer": "",
+                "duration_ms": 0.0,
+                "trace_id": None,
+            }
         result = await orchestrator.run(task, agents=agents, context=context)
         return result.model_dump(mode="json")
 
