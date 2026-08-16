@@ -10,6 +10,14 @@ from app.tools.builtin.data import (
     file_write_handler,
     sqlite_query_handler,
 )
+from app.tools.builtin.documents import (
+    ExtractWebArgs,
+    ReadExcelArgs,
+    ReadPdfArgs,
+    extract_web_handler,
+    read_excel_handler,
+    read_pdf_handler,
+)
 from app.tools.builtin.mail import SendEmailArgs, send_email_handler
 from app.tools.builtin.weather import weather_handler, WeatherArgs
 from app.tools.builtin.web import (
@@ -157,6 +165,36 @@ def build_default_registry() -> ToolRegistry:
             input_model=HttpGetJsonArgs,
             handler=http_get_json_handler,
             timeout_seconds=15.0,
+            risk_level="low",
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="read_pdf",
+            description="提取沙箱内 PDF 文件的文本内容（支持指定页或全部，限 8KB）。用于读取论文/文档。",
+            input_model=ReadPdfArgs,
+            handler=read_pdf_handler,
+            timeout_seconds=20.0,
+            risk_level="low",
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="read_excel",
+            description="读取沙箱内的 Excel（.xlsx/.xlsm）或 CSV 文件为 markdown 表格（支持指定 sheet，限 200 行）。",
+            input_model=ReadExcelArgs,
+            handler=read_excel_handler,
+            timeout_seconds=15.0,
+            risk_level="low",
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="extract_web",
+            description="抓取网页并提取正文为 markdown 风格文本（去导航/脚本，限 16KB）。用于深入阅读网页内容。",
+            input_model=ExtractWebArgs,
+            handler=extract_web_handler,
+            timeout_seconds=20.0,
             risk_level="low",
         )
     )
