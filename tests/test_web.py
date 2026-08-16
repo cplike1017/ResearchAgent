@@ -75,6 +75,8 @@ def test_web_chat_returns_trace(tmp_path):
             database_url=f"sqlite:///{tmp_path}/trace.db",
             trace_file=str(tmp_path / "trace.jsonl"),
             skills_enabled=True,
+            agent_mode="react",       # 显式 react：.env 的 AGENT_MODE=plan 不影响测试
+            memory_enabled=False,     # 显式关闭 memory：.env 的 MEMORY_ENABLED=true 不影响
         )
         app2 = _create(settings, redis=fakeredis.aioredis.FakeRedis(decode_responses=True))
         with TestClient(app2) as client2:

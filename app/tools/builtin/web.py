@@ -117,6 +117,43 @@ def http_get_handler(url: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# http_get_json（结构化 API 抓取）
+# ---------------------------------------------------------------------------
+class HttpGetJsonArgs(BaseModel):
+    """JSON API 抓取参数。"""
+
+    url: str = Field(description="返回 JSON 的 API 地址（http/https）")
+
+
+def http_get_json_handler(url: str) -> str:
+    """抓取 JSON API 并格式化返回（限 32KB）。"""
+    url = url.strip()
+    if not url.startswith(_ALLOWED_SCHEMES):
+        raise ToolExecutionError("只支持 http/https 协议")
+    try:
+        with httpx.Client(
+            timeout=Settings().http_tool_timeout_seconds,
+            follow_redirects=False,
+            headers={"User-Agent": "agent-runtime/0.1 (educational)"},
+        ) as client:
+            resp = client.get(url)
+    except httpx.HTTPError as exc:
+        raise ToolExecutionError(f"HTTP 请求失败: {exc}", transient=True) from exc
+    if resp.status_code != 200:
+        raise ToolExecutionError(f"HTTP {resp.status_code}")
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        raise ToolExecutionError(f"响应不是合法 JSON: {exc}") from exc
+
+    # 截断并格式化
+    text = json.dumps(data, ensure_ascii=False, indent=2)
+    if len(text) > 32768:
+        text = text[:32768] + "\n...（截断）"
+    return text
+
+
+# ---------------------------------------------------------------------------
 # get_time / get_date（本地时间，零依赖）
 # ---------------------------------------------------------------------------
 class TimeArgs(BaseModel):

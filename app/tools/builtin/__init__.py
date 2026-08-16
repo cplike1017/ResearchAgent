@@ -1,5 +1,7 @@
-"""内置工具包：calculator / get_weather + web_search / http_get / get_time / get_date + sqlite_query / file 读写 + send_email。"""
+"""内置工具包：calculator / get_weather + web / data / code 类真实工具 + send_email。"""
+from app.tools.builtin.analyze import AnalyzeDataArgs, analyze_data_handler
 from app.tools.builtin.calculator import calculator_handler, CalculatorArgs
+from app.tools.builtin.code_exec import RunCodeArgs, run_code_handler
 from app.tools.builtin.data import (
     FileReadArgs,
     FileWriteArgs,
@@ -13,11 +15,13 @@ from app.tools.builtin.weather import weather_handler, WeatherArgs
 from app.tools.builtin.web import (
     DateArgs,
     HttpGetArgs,
+    HttpGetJsonArgs,
     TimeArgs,
     WebSearchArgs,
     get_date_handler,
     get_time_handler,
     http_get_handler,
+    http_get_json_handler,
     web_search_handler,
 )
 from app.tools.registry import ToolDefinition, ToolRegistry
@@ -124,6 +128,36 @@ def build_default_registry() -> ToolRegistry:
             handler=send_email_handler,
             timeout_seconds=20.0,
             risk_level="medium",
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="analyze_data",
+            description="分析沙箱内的 CSV/JSON 数据文件：统计指标（均值/中位数/分位数/标准差）、按列分组、趋势检测。返回结构化统计摘要。",
+            input_model=AnalyzeDataArgs,
+            handler=analyze_data_handler,
+            timeout_seconds=15.0,
+            risk_level="low",
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="run_code",
+            description="在受限沙箱中执行 Python 代码（数据分析/计算/文件处理）。白名单模块：math/statistics/json/csv/re/collections 等。超时 10s，禁止 os/subprocess/网络。",
+            input_model=RunCodeArgs,
+            handler=run_code_handler,
+            timeout_seconds=30.0,
+            risk_level="medium",
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="http_get_json",
+            description="抓取返回 JSON 的 API 并结构化格式化输出（限 32KB）。用于对接 REST API 获取数据。",
+            input_model=HttpGetJsonArgs,
+            handler=http_get_json_handler,
+            timeout_seconds=15.0,
+            risk_level="low",
         )
     )
     return registry
