@@ -33,6 +33,7 @@ def settings(tmp_path) -> Settings:
         llm_provider="stub",
         embedding_provider="stub",
         agent_mode="react",  # 测试默认 react 模式（.env 的 AGENT_MODE=plan 不影响测试）
+        agent_profiles_file=str(tmp_path / "profiles.json"),  # 隔离动态档案，防污染默认文件
     )
 
 

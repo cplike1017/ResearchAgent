@@ -130,6 +130,173 @@ body {
 }
 .cap-list li:hover { background: var(--bg); color: var(--text); }
 
+/* ---- 子 Agent 档案列表 ---- */
+.agent-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px !important;
+  cursor: pointer !important;
+  border-radius: 4px;
+}
+.agent-item .si-icon { font-size: 11px; }
+.agent-item .si-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.agent-item .si-badge {
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--border);
+  color: var(--text-dim);
+}
+.agent-item:not(.builtin) .si-badge { background: rgba(56, 189, 248, 0.2); color: var(--accent); }
+.agent-item .si-del {
+  font-size: 10px;
+  color: var(--text-dim);
+  padding: 0 3px;
+  border-radius: 3px;
+  opacity: 0;
+  cursor: pointer;
+}
+.agent-item:hover .si-del { opacity: 1; }
+.agent-item .si-del:hover { color: var(--err); background: rgba(239, 68, 68, 0.15); }
+
+/* 档案注册表单 */
+.agent-form {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.af-input {
+  width: 100%;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 6px 8px;
+  resize: vertical;
+}
+.af-input:focus { outline: none; border-color: var(--accent); }
+.af-row { display: flex; gap: 6px; }
+.af-btn {
+  flex: 1;
+  padding: 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-sidebar);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.af-btn.primary { background: var(--accent); color: #0f172a; font-weight: 700; border-color: var(--accent); }
+.af-btn:hover { filter: brightness(1.15); }
+.af-error { color: var(--err); font-size: 11px; display: none; }
+
+/* ---- 编排记录列表 ---- */
+.orch-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px !important;
+  cursor: pointer !important;
+  border-radius: 4px;
+}
+.orch-item:hover { background: var(--bg); color: var(--text); }
+.orch-item .si-icon { font-size: 11px; }
+.orch-item .si-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.orch-item .si-time { font-size: 10px; opacity: 0.7; }
+
+/* ---- 编排详情面板 ---- */
+.orch-task {
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  border-radius: 6px;
+  border-left: 3px solid var(--accent);
+  margin-bottom: 8px;
+}
+.orch-section { margin-top: 10px; }
+.orch-section .tl-title { margin-bottom: 6px; }
+
+.subagent-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  overflow: hidden;
+  background: var(--bg);
+}
+.subagent-card .sa-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.subagent-card .sa-header:hover { background: rgba(56, 189, 248, 0.08); }
+.subagent-card .sa-icon { font-size: 13px; }
+.subagent-card .sa-name { font-weight: 700; font-size: 13px; }
+.subagent-card .sa-status {
+  font-size: 10px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-weight: 700;
+}
+.subagent-card .sa-status.ok { background: rgba(34, 197, 94, 0.2); color: var(--ok); }
+.subagent-card .sa-status.err { background: rgba(239, 68, 68, 0.2); color: var(--err); }
+.subagent-card .sa-meta { flex: 1; font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-card .ts-caret { color: var(--text-dim); font-size: 10px; }
+.subagent-card .sa-body { display: none; padding: 8px 10px; border-top: 1px solid var(--border); }
+.subagent-card.open .sa-body { display: block; }
+
+.orch-child {
+  padding: 6px 10px;
+  margin-bottom: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.orch-child:hover { border-color: var(--accent); }
+
+/* ---- delegate 工具输出摘要 ---- */
+.delegate-summary {
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+.delegate-summary .ds-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.delegate-summary .ds-agents { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+.delegate-summary .ds-agent {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--border);
+}
+.delegate-summary .ds-agent.ok { background: rgba(34, 197, 94, 0.18); color: var(--ok); }
+.delegate-summary .ds-agent.err { background: rgba(239, 68, 68, 0.18); color: var(--err); }
+.delegate-summary .ds-answer {
+  color: var(--text-dim);
+  border-top: 1px dashed var(--border);
+  padding-top: 6px;
+  white-space: pre-wrap;
+}
+
 /* ---- Main ---- */
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 

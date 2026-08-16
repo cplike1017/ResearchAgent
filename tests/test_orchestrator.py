@@ -523,6 +523,7 @@ def test_web_orchestrate_and_agents(tmp_path):
         eval_run_dir=str(tmp_path / "runs"),
         orchestrator_enabled=True,
         orchestrator_planner_strategy="stub",  # 确定性单步
+        agent_profiles_file=str(tmp_path / "profiles.json"),  # 隔离动态档案，避免污染默认文件
     )
     app = create_app(settings, redis=fakeredis.aioredis.FakeRedis(decode_responses=True))
     with TestClient(app) as client:

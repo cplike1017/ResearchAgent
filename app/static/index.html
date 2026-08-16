@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Agent Runtime Web UI</title>
-<link rel="stylesheet" href="/style.css?v=3">
+<link rel="stylesheet" href="/style.css?v=4">
 </head>
 <body>
 <div class="layout">
@@ -29,6 +29,22 @@
     </div>
 
     <div class="panel">
+      <h3>子 Agent 档案 <button id="add-agent-btn" class="mini-btn" title="注册新档案">＋</button></h3>
+      <ul class="cap-list" id="agent-list"></ul>
+      <div class="agent-form" id="agent-form" style="display:none">
+        <input type="text" id="agent-name" placeholder="档案名（英文）" class="af-input">
+        <input type="text" id="agent-desc" placeholder="职责说明" class="af-input">
+        <textarea id="agent-prompt" placeholder="系统提示（人设 + 工作规范）" class="af-input" rows="3"></textarea>
+        <input type="text" id="agent-tools" placeholder="工具白名单，逗号分隔（留空=全部）" class="af-input">
+        <div class="af-row">
+          <button id="agent-save" class="af-btn primary">注册</button>
+          <button id="agent-cancel" class="af-btn">取消</button>
+        </div>
+        <div class="af-error" id="agent-error"></div>
+      </div>
+    </div>
+
+    <div class="panel">
       <h3>技能 <span class="count" id="skill-count">0</span></h3>
       <ul class="cap-list" id="skill-list"></ul>
     </div>
@@ -48,6 +64,11 @@
       <ul class="cap-list" id="file-list"></ul>
       <input type="file" id="file-input" style="display:none">
     </div>
+
+    <div class="panel">
+      <h3>编排记录 <span class="count" id="orch-count">0</span></h3>
+      <ul class="cap-list" id="orch-list"></ul>
+    </div>
   </aside>
 
   <!-- 主区 -->
@@ -61,7 +82,7 @@
     <div class="messages" id="messages">
       <div class="welcome">
         <h2>🤖 Agent Runtime</h2>
-        <p>ReAct / Plan 双模式 · 记忆 · MCP · 技能</p>
+        <p>ReAct / Plan 双模式 · 记忆 · MCP · 技能 · 多 Agent 编排</p>
         <p class="sub">工作流完全透明：每步决策、工具调用、耗时、Trace 树实时可见</p>
       </div>
     </div>
@@ -75,6 +96,6 @@
 </div>
 
 <script src="/marked.min.js"></script>
-<script src="/app.js?v=3"></script>
+<script src="/app.js?v=4"></script>
 </body>
 </html>
