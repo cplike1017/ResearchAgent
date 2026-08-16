@@ -58,7 +58,7 @@ class SubAgentExecutor:
                 if allow_delegate:
                     registry.register(tool)
                 continue
-            if profile.allowed_tools is not None and tool.name not in profile.allowed_tools:
+            if profile.allowed_tools is not None and not _whitelist_match(tool.name, profile.allowed_tools):
                 continue
             registry.register(tool)
         return registry
@@ -131,6 +131,21 @@ class SubAgentExecutor:
         finally:
             result.duration_ms = round((time.perf_counter() - start) * 1000, 3)
         return result
+
+
+def _whitelist_match(name: str, allowed: list[str]) -> bool:
+    """白名单匹配：精确名 或 前缀通配（如 fs_* 匹配 fs_read_file）。
+
+    这是打通 MCP 工具进入子 agent 的关键：MCP 工具名（fs_*、fetch_*、
+    github_*）在运行时才注册，档案白名单无法预知全部名字，用前缀通配
+    即可按组放行。内置工具用精确名，互不干扰。
+    """
+    for rule in allowed:
+        if rule == name:
+            return True
+        if rule.endswith("*") and name.startswith(rule[:-1]):
+            return True
+    return False
 
 
 class _InstrumentedLLM:

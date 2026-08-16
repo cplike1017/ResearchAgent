@@ -3,11 +3,17 @@ from app.tools.builtin.analyze import AnalyzeDataArgs, analyze_data_handler
 from app.tools.builtin.calculator import calculator_handler, CalculatorArgs
 from app.tools.builtin.code_exec import RunCodeArgs, run_code_handler
 from app.tools.builtin.data import (
+    AppendNoteArgs,
     FileReadArgs,
     FileWriteArgs,
+    ListFilesArgs,
+    SearchFilesArgs,
     SqliteQueryArgs,
+    append_note_handler,
     file_read_handler,
     file_write_handler,
+    list_files_handler,
+    search_files_handler,
     sqlite_query_handler,
 )
 from app.tools.builtin.documents import (
@@ -19,6 +25,7 @@ from app.tools.builtin.documents import (
     read_pdf_handler,
 )
 from app.tools.builtin.mail import SendEmailArgs, send_email_handler
+from app.tools.builtin.research import ArxivSearchArgs, arxiv_search_handler
 from app.tools.builtin.weather import weather_handler, WeatherArgs
 from app.tools.builtin.web import (
     DateArgs,
@@ -195,6 +202,46 @@ def build_default_registry() -> ToolRegistry:
             input_model=ExtractWebArgs,
             handler=extract_web_handler,
             timeout_seconds=20.0,
+            risk_level="low",
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="arxiv_search",
+            description="检索 arXiv 学术论文（免费 API，无需 Key）。返回论文标题/作者/年份/摘要/链接。用于调研论文与文献验证。",
+            input_model=ArxivSearchArgs,
+            handler=arxiv_search_handler,
+            timeout_seconds=20.0,
+            risk_level="low",
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="list_files",
+            description="列出沙箱目录内的文件与子目录（含大小）。用于查看当前有哪些可用文件。",
+            input_model=ListFilesArgs,
+            handler=list_files_handler,
+            timeout_seconds=5.0,
+            risk_level="low",
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="search_files",
+            description="在沙箱目录内递归搜索包含关键词的文件内容，返回匹配行。用于查找已有资料/报告。",
+            input_model=SearchFilesArgs,
+            handler=search_files_handler,
+            timeout_seconds=10.0,
+            risk_level="low",
+        )
+    )
+    registry.register(
+        ToolDefinition(
+            name="append_note",
+            description="向沙箱文件追加内容（不覆盖已有内容）。用于跨子 Agent 协作积累草稿/资料。",
+            input_model=AppendNoteArgs,
+            handler=append_note_handler,
+            timeout_seconds=5.0,
             risk_level="low",
         )
     )

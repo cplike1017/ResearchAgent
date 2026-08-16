@@ -16,17 +16,26 @@ from dataclasses import dataclass, field
 
 # ---------------------------------------------------------------------------
 # 内置档案的工具白名单（与 app/tools/builtin 中的工具名对应）
+# MCP 工具按前缀通配放行（fs_* 文件系统 / fetch_* 网页抓取 / github_* 代码仓库）
 # ---------------------------------------------------------------------------
 _RESEARCHER_TOOLS = [
     "web_search", "http_get", "http_get_json", "extract_web",
     "read_pdf", "read_excel", "get_time", "get_date",
+    "arxiv_search", "list_files", "search_files",
+    "fetch_*",  # MCP fetch server：网页抓取
+    "github_*",  # MCP github server：查论文仓库/代码
 ]
 _ANALYST_TOOLS = [
     "calculator", "run_code", "analyze_data", "sqlite_query",
-    "http_get_json", "file_read", "get_time", "get_date",
+    "http_get_json", "file_read", "file_write", "get_time", "get_date",
+    "arxiv_search", "list_files", "search_files", "read_pdf", "read_excel",
+    "fs_*",  # MCP filesystem server：读写沙箱文件
+    "fetch_*",  # MCP fetch server：抓取数据源
 ]
 _WRITER_TOOLS = [
     "file_write", "send_email", "get_time", "get_date", "calculator",
+    "file_read", "list_files",
+    "fs_*",  # MCP filesystem server：读写沙箱文件
 ]
 
 _RESEARCHER_PROMPT = (
