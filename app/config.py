@@ -12,10 +12,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """agent-runtime 全部配置项。"""
+    """ReAgent 全部配置项。"""
 
     # ---------- 应用 ----------
-    app_name: str = "agent-runtime"
+    app_name: str = "ReAgent"
     # 运行环境：dev | test | prod（暂用于日志与默认值区分）
     environment: str = "dev"
 

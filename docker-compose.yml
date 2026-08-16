@@ -1,5 +1,5 @@
-# ============================================================
-# agent-runtime 编排：api + redis + worker
+﻿# ============================================================
+# reagent 编排：api + redis + worker
 # 启动: docker compose up --build
 # 扩容: docker compose up --scale worker=3
 # 说明: LLM_* 等变量从 .env 读取（可选）；无 .env 时默认使用内置 Stub 模型

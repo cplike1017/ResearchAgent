@@ -31,7 +31,7 @@ def test_web_index(tmp_path):
     with TestClient(_make_app(tmp_path)) as client:
         r = client.get("/")
         assert r.status_code == 200
-        assert "Agent Runtime" in r.text
+        assert "ReAgent" in r.text
 
 
 def test_web_capabilities(tmp_path):

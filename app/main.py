@@ -139,7 +139,7 @@ def create_app(settings: Settings | None = None, redis=None) -> FastAPI:
             app.state.runtime.memory.close()
         await client.aclose()
 
-    app = FastAPI(title="agent-runtime", version=settings.agent_version, lifespan=lifespan)
+    app = FastAPI(title=settings.app_name, version=settings.agent_version, lifespan=lifespan)
     app.include_router(router)
     app.include_router(web_router)
     # Web UI 静态资源

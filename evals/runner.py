@@ -1,4 +1,4 @@
-"""
+﻿"""
 Eval Runner：运行评测数据集并输出指标报告。
 
 用法：
@@ -233,7 +233,7 @@ def print_metrics(metrics: dict) -> None:
 
 
 async def main() -> None:
-    parser = argparse.ArgumentParser(description="agent-runtime Eval Runner")
+    parser = argparse.ArgumentParser(description="reagent Eval Runner")
     parser.add_argument("--dataset", default="evals/datasets/basic_agent.jsonl")
     parser.add_argument("--tag", default="candidate")
     parser.add_argument("--compare", default=None, help="Baseline Eval Run JSON 路径")

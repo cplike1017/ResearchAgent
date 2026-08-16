@@ -1,7 +1,7 @@
-"""
-agent-runtime 应用包。
+﻿"""
+reagent 应用包。
 
-从零实现的教学型 Agent Runtime，分六阶段演进：
+从零实现的教学型 ReAgent，分六阶段演进：
     Stage 1  ReAct / Tool Loop      —— Agent 怎么执行
     Stage 2  Context Builder        —— 模型实际看到什么
     Stage 3  Session / Checkpoint   —— 执行状态如何保存恢复

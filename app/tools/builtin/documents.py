@@ -1,4 +1,4 @@
-"""
+﻿"""
 文档处理工具：read_pdf / read_excel / extract_web。
 
 解决：Agent 需要处理真实文档（论文 PDF、Excel 数据表、网页正文）。
@@ -185,7 +185,7 @@ def extract_web_handler(url: str) -> str:
         with httpx.Client(
             timeout=Settings().http_tool_timeout_seconds,
             follow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; agent-runtime/0.1)"},
+            headers={"User-Agent": "Mozilla/5.0 (compatible; reagent/0.1)"},
         ) as client:
             resp = client.get(url)
     except httpx.HTTPError as exc:

@@ -1,4 +1,4 @@
-/* Agent Runtime Web UI 前端逻辑 v4 */
+/* ReAgent Web UI 前端逻辑 v4 */
 "use strict";
 
 const state = {
@@ -367,7 +367,7 @@ function newSession() {
   state.sessionId = null;
   $("#messages").innerHTML = `
     <div class="welcome">
-      <h2>🤖 Agent Runtime</h2>
+      <h2>🤖 ReAgent</h2>
       <p>ReAct / Plan 双模式 · 记忆 · MCP · 技能 · 多 Agent 编排</p>
       <p class="sub">工作流完全透明：每步决策、工具调用、耗时、Trace 树实时可见</p>
     </div>`;

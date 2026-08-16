@@ -1,4 +1,4 @@
-"""
+﻿"""
 真实工具包：web_search / http_get / get_time / get_date。
 
 区别于 calculator/weather 的 Stub 定位：
@@ -96,7 +96,7 @@ def http_get_handler(url: str) -> str:
         with httpx.Client(
             timeout=Settings().http_tool_timeout_seconds,
             follow_redirects=False,
-            headers={"User-Agent": "agent-runtime/0.1 (educational)"},
+            headers={"User-Agent": "reagent/0.1 (educational)"},
         ) as client:
             resp = client.get(url)
     except httpx.HTTPError as exc:
@@ -134,7 +134,7 @@ def http_get_json_handler(url: str) -> str:
         with httpx.Client(
             timeout=Settings().http_tool_timeout_seconds,
             follow_redirects=False,
-            headers={"User-Agent": "agent-runtime/0.1 (educational)"},
+            headers={"User-Agent": "reagent/0.1 (educational)"},
         ) as client:
             resp = client.get(url)
     except httpx.HTTPError as exc:

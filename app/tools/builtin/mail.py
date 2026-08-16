@@ -69,7 +69,7 @@ def send_email_handler(to: str, subject: str, body: str) -> str:
     # 中文邮件头：主题需要 Header 编码，发件人显示名用 formataddr
     msg = MIMEText(body, "plain", "utf-8")
     msg["Subject"] = Header(subject, "utf-8")
-    msg["From"] = formataddr((str(Header("Agent Runtime", "utf-8")), user))
+    msg["From"] = formataddr((str(Header("ReAgent", "utf-8")), user))
     msg["To"] = to
 
     try:
