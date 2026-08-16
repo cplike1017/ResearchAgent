@@ -1,7 +1,57 @@
-# ReAgent 面试指南：10 个高频追问与参考答案
+# ReAgent 面试指南：高频追问与参考答案
 
 > 用法：先自己用 30 秒口头回答，再对照本文校准。每个答案都对应项目里的
 > 真实代码位置 —— 面试时说出"代码在哪、踩过什么坑"远比背概念可信。
+
+## 速查：32 题面试问题清单
+
+### 架构与设计决策
+1. 为什么不用 LangGraph / CrewAI 而自己从零实现？（实习用框架 → 手写暴露协议层坑 → 每步可解释）
+2. ReAct 循环为什么需要循环？Tool Result 为什么要重新进入 Messages？
+3. Session 历史和 LLM Context 为什么不是一个东西？
+4. react 模式和 plan 模式怎么选？（简单任务 react 快；复杂任务 plan 拆解稳；反思重规划上限防死循环）
+5. 为什么 Agent 需要 Tracing？Trace 和 Log 有什么区别？（跨调用链关联：trace_id/span_id/parent_span_id）
+6. ContextVar 为什么比手动传参好？（隐式传递 + asyncio 任务自动复制副本）
+7. 为什么 Agent Evaluation 不能只看最终答案？（Outcome vs Trajectory 评测）
+
+### 协议与上下文细节
+8. "No tool output found" 400 是什么？怎么修？（三类根因：执行中断/窗口截断/连续 user，三个修复）
+9. 滑动窗口 vs 摘要压缩的取舍？（窗口保近、摘要保远，组合使用；窗口边界修复坑）
+10. 消息序列为什么要修复 tool 配对？（网关协议严格，中断/截断造成孤儿 tool 或悬空声明）
+11. Checkpoint 保存的是什么？和 Session 有什么区别？（AgentState 快照 vs 消息历史）
+12. PENDING_TOOL 状态恢复时会发生什么？（重新执行待办工具 → 工具可能执行两次，幂等话题）
+13. 连续 user 消息为什么非法？（user/assistant 必须交替；合并策略）
+
+### 工具治理与安全
+14. Tool Gateway 的职责链？（校验→权限→策略→超时→执行→结果校验，统一信封）
+15. Permission 和 Policy 有什么区别？（身份维度 vs 规则/风险维度）
+16. Tool 超时谁负责？为什么？（Gateway 统一 wait_for，防单工具阻塞 Worker）
+17. Retry 为什么可能导致 Tool 重复执行？（重试=重新执行 handler；非幂等工具重复副作用）
+18. run_code 沙箱怎么保证安全？（AST 白名单执行前拦截 + 模块白名单 + 超时；边界声明）
+19. 计算器为什么不用 eval()？（任意代码执行；ast 解析 + 白名单节点手工求值）
+
+### 记忆与 RAG
+20. 记忆层怎么工作？（提炼→向量化→存储→检索→注入；top_k + 阈值）
+21. 记忆检索失败会怎样？（fail-open 降级，不中断回合——真实踩坑：embedding 断连导致 chat 500）
+22. 重排策略解决什么问题？（粗召回×3 → 重排取 top_k；规则 vs LLM）
+23. 记忆和 Skill 为什么共用注入通道？（retrieved_docs 统一进 Context Builder，一个抽象管多种增强）
+
+### 多 Agent 编排 ⭐
+24. 多 Agent 编排的核心流程？（规划→依赖图并行执行→主管合成）
+25. 子 agent 上下文为什么不会互相污染？（独立 messages + 过滤工具集 + ContextVar 任务副本，三层）
+26. 子 agent 能力边界怎么保证？（工具白名单物理隔离，不是提示词自觉）
+27. 编排深度上限怎么防递归？（depth ContextVar + 叶子层移除 delegate + handler 兜底，三层防御）
+28. delegate 为什么对子 agent 不可见（叶子层）？（物理移除，模型根本不会产生嵌套调用）
+29. 一个子 agent 失败会怎样？（失败隔离：FAILED + 其余照常 + 部分成果传递；整体 PARTIAL）
+
+### 工程实践
+30. 240 个测试怎么保证离线？（Stub LLM + 临时 SQLite/Trace + fakeredis；conftest 隔离 .env）
+31. MCP 接入踩过什么坑？（stdio_client 同任务 enter/exit；工具名规范化；bridge 幂等）
+32. Web UI 的 Trace 树怎么实现的？（JSONL Span → build_tree → 前端递归渲染 + SSE 实时）
+
+---
+
+## 10 个高频追问与完整参考答案
 
 ---
 
