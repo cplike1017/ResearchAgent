@@ -433,3 +433,27 @@ async def test_store_remember_respects_scope(mem_store, mem_settings):
     other_docs = await mem_store.retrieve("北京", session_id="s_other")
     assert not any("用户询问" in d for d in other_docs)  # s_scope 的会话级不可见
     assert any("get_weather" in d for d in other_docs)   # global 可见
+
+
+def test_migration_adds_scope_to_old_table(tmp_path):
+    """旧库（无 scope 列）打开时自动迁移补列，且不报错。"""
+    import sqlite3
+
+    from app.memory.repository import SQLiteVecMemoryRepository
+
+    # 构造一个旧版 memories 表（无 scope 列）
+    db = f"sqlite:///{tmp_path}/old.db"
+    conn = sqlite3.connect(str(tmp_path / "old.db"))
+    conn.execute(
+        "CREATE TABLE memories (memory_id TEXT PRIMARY KEY, text TEXT NOT NULL, "
+        "embedding BLOB, memory_type TEXT DEFAULT 'fact', "
+        "source_session_id TEXT DEFAULT '', source_turn_id TEXT DEFAULT '', created_at TEXT NOT NULL)"
+    )
+    conn.commit()
+    conn.close()
+
+    # 打开仓库：迁移应补上 scope 列
+    repo = SQLiteVecMemoryRepository(db, dim=8)
+    cols = [r[1] for r in repo._conn.execute("PRAGMA table_info(memories)").fetchall()]
+    assert "scope" in cols
+    repo.close()

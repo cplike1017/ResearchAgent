@@ -54,6 +54,7 @@ class SQLiteVecMemoryRepository:
 
     def _init_schema(self) -> None:
         with self._lock:
+            # 1) 先建表（全新库直接带 scope 列）
             self._conn.executescript(
                 f"""
                 CREATE TABLE IF NOT EXISTS memories (
@@ -66,6 +67,14 @@ class SQLiteVecMemoryRepository:
                     source_turn_id    TEXT NOT NULL DEFAULT '',
                     created_at        TEXT NOT NULL
                 );
+                """
+            )
+            # 2) 旧库迁移：表已存在但缺 scope 列时补列
+            #    （必须在建索引之前：索引引用 scope，缺列会报 no such column）
+            self._migrate_scope()
+            # 3) 索引
+            self._conn.executescript(
+                """
                 CREATE INDEX IF NOT EXISTS idx_memories_type
                     ON memories(memory_type);
                 CREATE INDEX IF NOT EXISTS idx_memories_scope
@@ -75,7 +84,6 @@ class SQLiteVecMemoryRepository:
                 """
             )
             self._conn.commit()
-            self._migrate_scope()
 
     def _migrate_scope(self) -> None:
         """旧库迁移：memories 表缺少 scope 列时补列（默认 'session' 兼容旧行为）。
