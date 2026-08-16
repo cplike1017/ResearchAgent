@@ -44,7 +44,8 @@ class MemoryStore:
         self.repository = repository or SQLiteVecMemoryRepository(
             self.settings.database_url, dim=dim
         )
-        self.extractor = extractor or MemoryExtractor(self.settings)
+        # extractor：显式注入优先；否则按配置创建（llm 策略需要主 LLM）
+        self.extractor = extractor or MemoryExtractor(self.settings, llm=llm)
         # 重排器：显式注入优先；llm 策略需要主 LLM（AgentRuntime 注入）
         self.reranker = reranker
         if self.reranker is None and self.settings.memory_rerank_strategy != "off":
@@ -99,27 +100,37 @@ class MemoryStore:
             return []  # 降级：写入失败不影响主流程
 
     async def _write_facts(
-        self, facts: list[str], session_id: str, turn_id: str
+        self, facts: list[dict], session_id: str, turn_id: str
     ) -> list[MemoryRecord]:
-        """把事实句向量化并批量写入仓库。"""
-        vectors = await self.embedding.embed(facts)
+        """把分类事实句向量化并批量写入仓库。
+
+        :param facts: [{"text": str, "memory_type": str, "scope": "session|global"}]
+        """
+        texts = [f["text"] for f in facts]
+        vectors = await self.embedding.embed(texts)
         records = [
             {
                 "text": text,
                 "embedding": vec,
-                "memory_type": "fact",
+                "memory_type": f.get("memory_type", "fact"),
+                "scope": f.get("scope", "session"),
                 "source_session_id": session_id,
                 "source_turn_id": turn_id,
             }
-            for text, vec in zip(facts, vectors)
+            for text, vec, f in zip(texts, vectors, facts)
         ]
         return self.repository.add_batch(records)
 
     # ------------------------------------------------------------------
     # 检索：构建上下文前调用
     # ------------------------------------------------------------------
-    async def retrieve(self, query: str, *, top_k: int | None = None) -> list[str]:
+    async def retrieve(
+        self, query: str, *, top_k: int | None = None, session_id: str | None = None
+    ) -> list[str]:
         """返回相关记忆文本列表（注入 Context Builder retrieved_docs）。
+
+        分层语义：session_id 给定 → 全局记忆 + 本会话会话级记忆；
+        session_id 为空 → 仅全局记忆。
 
         降级语义：检索（embedding 服务 / 仓库）失败时不抛异常、返回空列表，
         保证记忆层是"可选增强"而非"单点故障" —— Agent 回合不应因记忆
@@ -129,25 +140,27 @@ class MemoryStore:
             return []
         try:
             if self.recorder is None or not self.recorder.enabled:
-                return await self.retriever.retrieve(query, top_k=top_k)
+                return await self.retriever.retrieve(query, top_k=top_k, session_id=session_id)
 
             async with trace_span(
                 "memory.retrieve",
                 "memory",
-                input={"query": query},
+                input={"query": query, "session_id": session_id},
                 recorder=self.recorder,
             ) as span:
-                docs = await self.retriever.retrieve(query, top_k=top_k)
+                docs = await self.retriever.retrieve(query, top_k=top_k, session_id=session_id)
                 span.output = {"hits": len(docs)}
                 return docs
         except Exception:
             return []  # 降级：记忆不可用不影响主流程
 
-    async def retrieve_records(self, query: str, *, top_k: int | None = None) -> list[MemoryRecord]:
+    async def retrieve_records(
+        self, query: str, *, top_k: int | None = None, session_id: str | None = None
+    ) -> list[MemoryRecord]:
         """检索完整记录（含分数，测试 / demo 用）。"""
         if not self.enabled:
             return []
-        return await self.retriever.retrieve_records(query, top_k=top_k)
+        return await self.retriever.retrieve_records(query, top_k=top_k, session_id=session_id)
 
     def close(self) -> None:
         """关闭仓库连接（embedding 连接池由上层负责）。"""

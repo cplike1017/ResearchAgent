@@ -7,19 +7,50 @@
     正确做法：提炼成"事实句"（如"用户上次查询了北京天气"），
     只存信息密度高的内容。
 
+提炼分类（memory_type）：
+    fact        具体事实（"用户查询了北京天气"）→ 默认写入会话级记忆
+    preference  用户偏好（"用户关注 RAG 应用开发"）→ 写入全局记忆（跨会话复用）
+    conclusion  任务结论（"调研表明动态图通信适合 MARL"）→ 写入全局记忆
+
 策略（与 context_builder 的 summary 策略同构）：
     stub —— 确定性规则提炼（不调用模型，测试 / 离线默认）
-    llm  —— 调用 LLM 提炼（需要真实模型）
+    llm  —— 调用 LLM 结构化提炼（需要真实模型）：输出 JSON
+            {"facts": [...], "preferences": [...], "conclusions": [...]}
     off  —— 关闭自动提炼（build 前由上层拦截）
+
+LLM 输出防御：
+    1. 要求严格 JSON，容忍 ```json 代码块包裹 / 前后废话；
+    2. 解析失败 → 降级 stub 规则提炼，绝不抛异常；
+    3. 每类最多 5 条，截断超长。
 """
 import json
+import re
 
 from app.config import Settings
 from app.llm.client import BaseLLMClient
 
+# 每类提炼条数上限
+MAX_PER_TYPE = 5
+# 单条事实长度上限
+MAX_FACT_LEN = 160
+
+_LLM_EXTRACT_PROMPT = """请从下面的 Agent 对话中提炼值得长期记住的信息，按三类输出严格 JSON（不要 Markdown 代码块、不要多余文字）：
+
+{{"facts": ["具体事实，如「用户查询了北京天气」"],
+ "preferences": ["用户偏好/习惯/身份信息，如「用户关注 RAG 应用开发」"],
+ "conclusions": ["本次对话得出的结论，如「调研表明动态图通信适合 MARL」"]}}
+
+要求：
+1. 每类最多 {max_per_type} 条，每条一句话、不超过 {max_fact_len} 字；
+2. 只输出 JSON 本身；没有某类内容则输出空数组；
+3. 寒暄（你好/谢谢）不要提炼。
+
+对话内容：
+{messages}"""
+
 
 class MemoryExtractor:
-    """把一轮 Agent 回合的 messages 提炼为事实句列表。"""
+    """把一轮 Agent 回合的 messages 提炼为分类事实。"""
 
     def __init__(
         self,
@@ -33,8 +64,11 @@ class MemoryExtractor:
     # ------------------------------------------------------------------
     # 主入口（async：llm 策略需要 await）
     # ------------------------------------------------------------------
-    async def extract(self, messages: list[dict]) -> list[str]:
-        """从一轮回合的完整 messages 提炼事实句。"""
+    async def extract(self, messages: list[dict]) -> list[dict]:
+        """从一轮回合的完整 messages 提炼分类事实。
+
+        返回：[{"text": str, "memory_type": "fact|preference|conclusion", "scope": "session|global"}]
+        """
         if self.strategy == "off":
             return []
         if self.strategy == "llm" and self.llm is not None:
@@ -44,20 +78,26 @@ class MemoryExtractor:
     # ------------------------------------------------------------------
     # 确定性规则提炼（默认，离线可用）
     # ------------------------------------------------------------------
-    def _stub_extract(self, messages: list[dict]) -> list[str]:
-        """规则提炼：抽取 用户提问 + 工具结果 中的关键信息。"""
-        facts: list[str] = []
+    def _stub_extract(self, messages: list[dict]) -> list[dict]:
+        """规则提炼：抽取 用户提问（fact） + 工具结果（fact/conclusion）。"""
+        items: list[dict] = []
 
-        # 1) 用户最后一条有效提问（去掉寒暄）
+        # 1) 用户最后一条有效提问（去掉寒暄）→ fact / 会话级
         for msg in reversed(messages):
             if msg.get("role") == "user":
                 content = msg.get("content") or ""
                 if isinstance(content, str) and len(content.strip()) > 4:
                     if not _is_chitchat(content):
-                        facts.append(f"用户询问：{content.strip()[:80]}")
+                        items.append(
+                            {
+                                "text": f"用户询问：{content.strip()[:MAX_FACT_LEN]}",
+                                "memory_type": "fact",
+                                "scope": "session",
+                            }
+                        )
                 break
 
-        # 2) 工具执行结果（成功的结果值得记住）
+        # 2) 工具执行结果（成功的结果值得记住）→ conclusion / 全局
         for msg in messages:
             if msg.get("role") == "tool":
                 try:
@@ -68,30 +108,85 @@ class MemoryExtractor:
                     name = msg.get("name", "")
                     data = envelope.get("data")
                     if isinstance(data, str):
-                        facts.append(f"工具 {name} 返回：{data[:80]}")
+                        items.append(
+                            {
+                                "text": f"工具 {name} 返回：{data[:MAX_FACT_LEN]}",
+                                "memory_type": "conclusion",
+                                "scope": "global",
+                            }
+                        )
 
-        # 去重（同一文本只保留一次）
-        seen: set[str] = set()
-        out: list[str] = []
-        for f in facts:
-            if f not in seen:
-                seen.add(f)
-                out.append(f)
-        return out
+        return _dedupe(items)
 
     # ------------------------------------------------------------------
-    # LLM 提炼（真实模型）
+    # LLM 结构化提炼（真实模型，JSON 分类输出）
     # ------------------------------------------------------------------
-    async def _llm_extract(self, messages: list[dict]) -> list[str]:
-        """调用 LLM 提炼事实（教学演示；生产可用更专业的提炼 Prompt）。"""
-        prompt = (
-            "请从下面这段 Agent 对话中提炼出值得长期记住的事实，"
-            "每条一行，最多 5 条。只输出事实本身，不要编号。\n"
-            + json.dumps(messages, ensure_ascii=False)
+    async def _llm_extract(self, messages: list[dict]) -> list[dict]:
+        """调用 LLM 提炼为 facts/preferences/conclusions 三类；失败降级 stub。"""
+        prompt = _LLM_EXTRACT_PROMPT.format(
+            max_per_type=MAX_PER_TYPE,
+            max_fact_len=MAX_FACT_LEN,
+            messages=json.dumps(messages, ensure_ascii=False),
         )
-        response = await self.llm.chat([{"role": "user", "content": prompt}], tools=None)
-        lines = [ln.strip() for ln in (response.content or "").splitlines() if ln.strip()]
-        return lines[:5]
+        try:
+            response = await self.llm.chat([{"role": "user", "content": prompt}], tools=None)
+        except Exception:
+            return self._stub_extract(messages)
+
+        parsed = _parse_classified_json(response.content or "")
+        if parsed is None:
+            return self._stub_extract(messages)
+
+        items: list[dict] = []
+        # 分类 → 类型 + 作用域（偏好/结论跨会话复用，事实默认会话级）
+        for text in parsed.get("facts", [])[:MAX_PER_TYPE]:
+            items.append({"text": _clean_fact(text), "memory_type": "fact", "scope": "session"})
+        for text in parsed.get("preferences", [])[:MAX_PER_TYPE]:
+            items.append({"text": _clean_fact(text), "memory_type": "preference", "scope": "global"})
+        for text in parsed.get("conclusions", [])[:MAX_PER_TYPE]:
+            items.append({"text": _clean_fact(text), "memory_type": "conclusion", "scope": "global"})
+        return _dedupe([i for i in items if i["text"]])
+
+
+def _parse_classified_json(raw: str) -> dict | None:
+    """解析 LLM 返回的分类 JSON（容忍代码块 / 前后文字）。"""
+    if not raw:
+        return None
+    text = raw.strip()
+    fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+    if fence:
+        text = fence.group(1).strip()
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    try:
+        obj = json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    # 容错：只保留三类数组字段
+    return {k: v for k, v in obj.items() if k in ("facts", "preferences", "conclusions") and isinstance(v, list)}
+
+
+def _clean_fact(text: str) -> str:
+    """清洗单条事实：去空白、截断、跳过空/寒暄。"""
+    t = text.strip().strip('"').strip("'")
+    if len(t) <= 2 or _is_chitchat(t):
+        return ""
+    return t[:MAX_FACT_LEN]
+
+
+def _dedupe(items: list[dict]) -> list[dict]:
+    """按文本去重（同文本只保留一次）。"""
+    seen: set[str] = set()
+    out: list[dict] = []
+    for item in items:
+        key = item["text"]
+        if key not in seen:
+            seen.add(key)
+            out.append(item)
+    return out
 
 
 _CHITCHAT = {

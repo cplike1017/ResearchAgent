@@ -61,15 +61,31 @@ class SQLiteVecMemoryRepository:
                     text              TEXT NOT NULL,
                     embedding         vector({self._dim}),
                     memory_type       TEXT NOT NULL DEFAULT 'fact',
+                    scope             TEXT NOT NULL DEFAULT 'session',
                     source_session_id TEXT NOT NULL DEFAULT '',
                     source_turn_id    TEXT NOT NULL DEFAULT '',
                     created_at        TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_memories_type
                     ON memories(memory_type);
+                CREATE INDEX IF NOT EXISTS idx_memories_scope
+                    ON memories(scope);
                 CREATE INDEX IF NOT EXISTS idx_memories_created
                     ON memories(created_at);
                 """
+            )
+            self._conn.commit()
+            self._migrate_scope()
+
+    def _migrate_scope(self) -> None:
+        """旧库迁移：memories 表缺少 scope 列时补列（默认 'session' 兼容旧行为）。
+
+        sqlite 不支持 ADD COLUMN IF NOT EXISTS，用 PRAGMA table_info 判断。
+        """
+        cols = [r[1] for r in self._conn.execute("PRAGMA table_info(memories)").fetchall()]
+        if "scope" not in cols:
+            self._conn.execute(
+                "ALTER TABLE memories ADD COLUMN scope TEXT NOT NULL DEFAULT 'session'"
             )
             self._conn.commit()
 
@@ -82,6 +98,7 @@ class SQLiteVecMemoryRepository:
         embedding: list[float],
         *,
         memory_type: str = "fact",
+        scope: str = "session",
         source_session_id: str = "",
         source_turn_id: str = "",
         memory_id: str | None = None,
@@ -92,19 +109,21 @@ class SQLiteVecMemoryRepository:
             text=text,
             embedding=embedding,
             memory_type=memory_type,
+            scope=scope,
             source_session_id=source_session_id,
             source_turn_id=source_turn_id,
             created_at=utc_now(),
         )
         with self._lock:
             self._conn.execute(
-                "INSERT INTO memories (memory_id, text, embedding, memory_type, source_session_id, source_turn_id, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO memories (memory_id, text, embedding, memory_type, scope, source_session_id, source_turn_id, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     record.memory_id,
                     record.text,
                     sqlite_vec.serialize_float32(embedding),
                     record.memory_type,
+                    record.scope,
                     record.source_session_id,
                     record.source_turn_id,
                     record.created_at,
@@ -123,18 +142,20 @@ class SQLiteVecMemoryRepository:
                     text=r["text"],
                     embedding=r["embedding"],
                     memory_type=r.get("memory_type", "fact"),
+                    scope=r.get("scope", "session"),
                     source_session_id=r.get("source_session_id", ""),
                     source_turn_id=r.get("source_turn_id", ""),
                     created_at=utc_now(),
                 )
                 self._conn.execute(
-                    "INSERT INTO memories (memory_id, text, embedding, memory_type, source_session_id, source_turn_id, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO memories (memory_id, text, embedding, memory_type, scope, source_session_id, source_turn_id, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         rec.memory_id,
                         rec.text,
                         sqlite_vec.serialize_float32(rec.embedding),
                         rec.memory_type,
+                        rec.scope,
                         rec.source_session_id,
                         rec.source_turn_id,
                         rec.created_at,
@@ -155,23 +176,46 @@ class SQLiteVecMemoryRepository:
         min_score: float = 0.0,
         half_life_hours: float = 24.0,
         memory_type: str | None = None,
+        scope: str | None = None,
+        session_id: str | None = None,
     ) -> list[MemoryRecord]:
         """
         检索最相似的记忆。
+
+        分层语义（scope + session_id）：
+            - scope=None + session_id=None → 全部记忆
+            - scope="global"               → 只检索全局记忆（跨会话共享）
+            - scope="session" + session_id → 只检索该会话的会话级记忆
+            - session_id 给定（scope=None）→ global 全部 + 本会话 session 级
 
         评分 = 余弦相似度 × 时间衰减（decay = exp(-age_hours / half_life_hours)）。
         sqlite-vec 的 vec_distance_cosine 返回 0(最相似)~2(最不相似)，
         转相似度：sim = 1 - distance。
         """
         q = sqlite_vec.serialize_float32(query_embedding)
-        where = ""
-        params: list[Any] = [q, top_k]
+        where_clauses: list[str] = []
+        params: list[Any] = [q]
+
+        if scope is not None:
+            if scope == "global":
+                where_clauses.append("scope = 'global'")
+            elif scope == "session" and session_id:
+                where_clauses.append("scope = 'session' AND source_session_id = ?")
+                params.append(session_id)
+        elif session_id:
+            # 会话视角：全局记忆 + 本会话的会话级记忆
+            where_clauses.append("(scope = 'global' OR (scope = 'session' AND source_session_id = ?))")
+            params.append(session_id)
+
         if memory_type:
-            where = "WHERE memory_type = ?"
-            params = [q, memory_type, top_k]
+            where_clauses.append("memory_type = ?")
+            params.append(memory_type)
+
+        where = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        params.append(top_k)
         rows = self._conn.execute(
             f"""
-            SELECT memory_id, text, memory_type, source_session_id, source_turn_id, created_at,
+            SELECT memory_id, text, memory_type, scope, source_session_id, source_turn_id, created_at,
                    vec_distance_cosine(embedding, ?) AS distance
             FROM memories
             {where}
@@ -199,6 +243,7 @@ class SQLiteVecMemoryRepository:
                     memory_id=row["memory_id"],
                     text=row["text"],
                     memory_type=row["memory_type"],
+                    scope=row["scope"],
                     source_session_id=row["source_session_id"],
                     source_turn_id=row["source_turn_id"],
                     created_at=row["created_at"],
@@ -219,7 +264,7 @@ class SQLiteVecMemoryRepository:
     def list_all(self, limit: int = 100) -> list[MemoryRecord]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT memory_id, text, memory_type, source_session_id, source_turn_id, created_at "
+                "SELECT memory_id, text, memory_type, scope, source_session_id, source_turn_id, created_at "
                 "FROM memories ORDER BY created_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
@@ -228,6 +273,7 @@ class SQLiteVecMemoryRepository:
                 memory_id=r["memory_id"],
                 text=r["text"],
                 memory_type=r["memory_type"],
+                scope=r["scope"],
                 source_session_id=r["source_session_id"],
                 source_turn_id=r["source_turn_id"],
                 created_at=r["created_at"],

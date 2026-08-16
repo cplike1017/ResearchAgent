@@ -247,11 +247,12 @@ class AgentRuntime:
         messages = state.messages
 
         # Stage 8：构建上下文前，用最后一条用户消息检索相关记忆
+        # 分层：传入本会话 session_id → 全局记忆 + 本会话会话级记忆
         retrieved_docs: list[str] | None = None
         query = _last_user_text(messages)
         if self.memory is not None:
             if query:
-                retrieved_docs = await self.memory.retrieve(query)
+                retrieved_docs = await self.memory.retrieve(query, session_id=state.session_id)
 
         # Skill：匹配用户输入对应的技能，指令注入上下文
         if self.skill_manager is not None and query:
@@ -346,10 +347,10 @@ class AgentRuntime:
         current_task = task
         final_answer = ""
 
-        # Stage 8 联动：规划前检索相关记忆，供 LLM 规划参考
+        # Stage 8 联动：规划前检索相关记忆，供 LLM 规划参考（分层：全局 + 本会话）
         memory_context: list[str] | None = None
         if self.memory is not None:
-            memory_context = await self.memory.retrieve(task)
+            memory_context = await self.memory.retrieve(task, session_id=state.session_id)
 
         while True:
             # 每次执行使用独立的回合消息快照（基于原始 messages 拷贝），

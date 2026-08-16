@@ -40,12 +40,20 @@ class MemoryRetriever:
             self.reranker = create_reranker(self.settings, llm=llm)
 
     # ------------------------------------------------------------------
-    async def retrieve(self, query: str, *, top_k: int | None = None) -> list[str]:
-        """检索与查询相关的记忆，返回文本列表（供 retrieved_docs 注入）。"""
-        records = await self.retrieve_records(query, top_k=top_k)
+    async def retrieve(
+        self, query: str, *, top_k: int | None = None, session_id: str | None = None
+    ) -> list[str]:
+        """检索与查询相关的记忆，返回文本列表（供 retrieved_docs 注入）。
+
+        分层语义：session_id 给定 → 全局记忆 + 本会话会话级记忆；
+        session_id 为空 → 仅全局记忆（跨会话共享层）。
+        """
+        records = await self.retrieve_records(query, top_k=top_k, session_id=session_id)
         return [r.text for r in records]
 
-    async def retrieve_records(self, query: str, *, top_k: int | None = None) -> list[MemoryRecord]:
+    async def retrieve_records(
+        self, query: str, *, top_k: int | None = None, session_id: str | None = None
+    ) -> list[MemoryRecord]:
         """检索并返回完整记录（含分数，供 demo / 测试观察）。"""
         if not query or not query.strip():
             return []
@@ -59,11 +67,22 @@ class MemoryRetriever:
         #     过早过滤会把它们提前丢掉）
         multiplier = self.settings.memory_rerank_candidate_multiplier
         raw_top = max(top_k, top_k * multiplier)
-        candidates = self.repository.search(
-            vectors[0],
-            top_k=raw_top,
-            min_score=-1.0,  # 粗召回阶段不过滤
-        )
+        # 分层视角：有 session_id → global + 本会话 session 级；
+        # 无 session_id → 仅 global 层（跨会话共享记忆）
+        if session_id:
+            candidates = self.repository.search(
+                vectors[0],
+                top_k=raw_top,
+                min_score=-1.0,  # 粗召回阶段不过滤
+                session_id=session_id,
+            )
+        else:
+            candidates = self.repository.search(
+                vectors[0],
+                top_k=raw_top,
+                min_score=-1.0,
+                scope="global",
+            )
         if not candidates:
             return []
 
