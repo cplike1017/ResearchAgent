@@ -82,18 +82,21 @@ class MemoryStore:
         if not facts:
             return []
 
-        if self.recorder is None or not self.recorder.enabled:
-            return await self._write_facts(facts, session_id, turn_id)
+        try:
+            if self.recorder is None or not self.recorder.enabled:
+                return await self._write_facts(facts, session_id, turn_id)
 
-        async with trace_span(
-            "memory.remember",
-            "memory",
-            input={"session_id": session_id, "turn_id": turn_id, "fact_count": len(facts)},
-            recorder=self.recorder,
-        ) as span:
-            records = await self._write_facts(facts, session_id, turn_id)
-            span.output = {"stored": len(records)}
-            return records
+            async with trace_span(
+                "memory.remember",
+                "memory",
+                input={"session_id": session_id, "turn_id": turn_id, "fact_count": len(facts)},
+                recorder=self.recorder,
+            ) as span:
+                records = await self._write_facts(facts, session_id, turn_id)
+                span.output = {"stored": len(records)}
+                return records
+        except Exception:
+            return []  # 降级：写入失败不影响主流程
 
     async def _write_facts(
         self, facts: list[str], session_id: str, turn_id: str
@@ -116,21 +119,29 @@ class MemoryStore:
     # 检索：构建上下文前调用
     # ------------------------------------------------------------------
     async def retrieve(self, query: str, *, top_k: int | None = None) -> list[str]:
-        """返回相关记忆文本列表（注入 Context Builder retrieved_docs）。"""
+        """返回相关记忆文本列表（注入 Context Builder retrieved_docs）。
+
+        降级语义：检索（embedding 服务 / 仓库）失败时不抛异常、返回空列表，
+        保证记忆层是"可选增强"而非"单点故障" —— Agent 回合不应因记忆
+        服务不可用而中断（记忆失败 → 本轮无记忆，继续执行）。
+        """
         if not self.enabled:
             return []
-        if self.recorder is None or not self.recorder.enabled:
-            return await self.retriever.retrieve(query, top_k=top_k)
+        try:
+            if self.recorder is None or not self.recorder.enabled:
+                return await self.retriever.retrieve(query, top_k=top_k)
 
-        async with trace_span(
-            "memory.retrieve",
-            "memory",
-            input={"query": query},
-            recorder=self.recorder,
-        ) as span:
-            docs = await self.retriever.retrieve(query, top_k=top_k)
-            span.output = {"hits": len(docs)}
-            return docs
+            async with trace_span(
+                "memory.retrieve",
+                "memory",
+                input={"query": query},
+                recorder=self.recorder,
+            ) as span:
+                docs = await self.retriever.retrieve(query, top_k=top_k)
+                span.output = {"hits": len(docs)}
+                return docs
+        except Exception:
+            return []  # 降级：记忆不可用不影响主流程
 
     async def retrieve_records(self, query: str, *, top_k: int | None = None) -> list[MemoryRecord]:
         """检索完整记录（含分数，测试 / demo 用）。"""

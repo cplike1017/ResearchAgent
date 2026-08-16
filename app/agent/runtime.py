@@ -67,11 +67,18 @@ class AgentRuntime:
         memory: MemoryStore | None = None,  # Stage 8 记忆层（None = 不启用）
         mcp_client=None,  # MCPClientManager | None（None = 不接入 MCP）
         skill_manager=None,  # SkillManager | None（None = 不启用技能）
+        orchestrator=None,  # OrchestratorRunner | None（None = 不注册 delegate 工具）
         settings: Settings | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.llm = llm or create_llm_client(self.settings)
         self.registry = registry or build_default_registry()
+        # Stage 12：编排器注入时，向 registry 注册 delegate 工具（主 agent 的委派入口）
+        self.orchestrator = orchestrator
+        if orchestrator is not None and self.settings.orchestrator_enabled:
+            from app.orchestrator.tool import build_delegate_tool
+
+            self.registry.register(build_delegate_tool(orchestrator), overwrite=True)
         self.recorder = recorder
         # Stage 5：工具执行统一走 Tool Gateway（校验 / 权限 / 策略 / 超时）
         self.tool_gateway = tool_gateway or ToolGateway(self.registry, settings=self.settings, recorder=recorder)

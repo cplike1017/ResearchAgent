@@ -56,6 +56,11 @@ async def web_chat(req: WebChatRequest, request: Request) -> dict:
     settings.agent_mode = agent_mode
     try:
         result = await runtime.run(req.message, session_id=req.session_id)
+    except AgentError as exc:
+        # 结构化错误（LLM 不可用 / 超步数等）：HTTP 502，前端可读 message
+        raise HTTPException(status_code=502, detail={"type": type(exc).__name__, "message": str(exc)})
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail={"type": type(exc).__name__, "message": str(exc)})
     finally:
         settings.agent_mode = old_mode
 
@@ -218,6 +223,60 @@ async def web_tools(request: Request) -> dict:
             "required_permission": t.required_permission,
         })
     return {"tools": tools, "count": len(tools)}
+
+
+# ---------------------------------------------------------------------------
+# 多 Agent 编排（Stage 12）：直接编排入口 + 子 Agent 档案列表
+# ---------------------------------------------------------------------------
+class WebOrchestrateRequest(BaseModel):
+    """编排请求。"""
+
+    task: str = Field(description="要编排的任务")
+    agents: list[str] | None = Field(default=None, description="指定子 Agent 名单；缺省自动分工")
+    context: str = Field(default="", description="背景信息")
+
+
+@router.post("/orchestrate")
+async def web_orchestrate(req: WebOrchestrateRequest, request: Request) -> dict:
+    runtime = _get_runtime(request)
+    if runtime.orchestrator is None:
+        raise HTTPException(status_code=503, detail="编排器未启用（ORCHESTRATOR_ENABLED=false）")
+    result = await runtime.orchestrator.run(req.task, agents=req.agents, context=req.context)
+    trace_tree = None
+    if result.trace_id:
+        try:
+            trace_tree = request.app.state.recorder.build_tree(result.trace_id)
+        except Exception:
+            trace_tree = None
+    return {
+        "task": result.task,
+        "plan": result.plan.model_dump(),
+        "agent_results": [r.model_dump() for r in result.agent_results],
+        "final_answer": result.final_answer,
+        "status": result.status,
+        "duration_ms": result.duration_ms,
+        "trace_id": result.trace_id,
+        "trace": trace_tree,
+    }
+
+
+@router.get("/agents")
+async def web_agents(request: Request) -> dict:
+    """列出可用的子 Agent 档案。"""
+    from app.orchestrator.profiles import BUILTIN_PROFILES
+
+    return {
+        "agents": [
+            {
+                "name": p.name,
+                "description": p.description,
+                "allowed_tools": p.allowed_tools,
+                "max_steps": p.max_steps,
+            }
+            for p in BUILTIN_PROFILES
+        ],
+        "count": len(BUILTIN_PROFILES),
+    }
 
 
 @router.get("/skills")

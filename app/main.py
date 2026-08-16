@@ -35,8 +35,9 @@ from app.tracing.recorder import TraceRecorder
 
 
 def build_web_runtime(settings: Settings, recorder: TraceRecorder) -> AgentRuntime:
-    """构建 Web 进程内运行时：AgentRuntime + 记忆 + MCP + 技能。"""
+    """构建 Web 进程内运行时：AgentRuntime + 记忆 + MCP + 技能 + 多 Agent 编排。"""
     llm = create_llm_client(settings)
+    registry = build_default_registry()
     session_repo = SQLiteSessionRepository(settings.database_url)
     checkpoint_repo = SQLiteCheckpointRepository(settings.database_url)
 
@@ -60,15 +61,28 @@ def build_web_runtime(settings: Settings, recorder: TraceRecorder) -> AgentRunti
     if settings.skills_enabled:
         skill_manager = SkillManager(settings=settings, llm=llm)
 
+    # Stage 12：多 Agent 编排器（注入 runtime 后自动注册 delegate 工具）
+    orchestrator = None
+    if settings.orchestrator_enabled:
+        from app.orchestrator.runner import OrchestratorRunner
+
+        orchestrator = OrchestratorRunner(
+            llm=llm,
+            registry=registry,
+            settings=settings,
+            recorder=recorder,
+        )
+
     return AgentRuntime(
         llm=llm,
-        registry=build_default_registry(),
+        registry=registry,
         session_repo=session_repo,
         checkpoint_repo=checkpoint_repo,
         recorder=recorder,
         memory=memory,
         mcp_client=mcp_client,
         skill_manager=skill_manager,
+        orchestrator=orchestrator,
         settings=settings,
     )
 

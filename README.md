@@ -7,12 +7,17 @@
 工具网关与策略、链路追踪与评测 —— 全部自己实现。
 
 ```text
-Stage 1  Agent 怎么执行？          → ReAct / Tool Loop
-Stage 2  模型实际看到什么？         → Context Builder
-Stage 3  执行状态如何保存恢复？     → Session / Checkpoint
-Stage 4  并发请求怎么处理？         → Redis Queue / Worker
-Stage 5  Tool 怎么统一治理？        → Tool Gateway / Policy
-Stage 6  为什么失败、修改是否变好？ → Tracing / Evaluation
+Stage 1   Agent 怎么执行？          → ReAct / Tool Loop
+Stage 2   模型实际看到什么？         → Context Builder
+Stage 3   执行状态如何保存恢复？     → Session / Checkpoint
+Stage 4   并发请求怎么处理？         → Redis Queue / Worker
+Stage 5   Tool 怎么统一治理？        → Tool Gateway / Policy
+Stage 6   为什么失败、修改是否变好？ → Tracing / Evaluation
+Stage 8   长期记忆怎么存怎么取？     → Memory（向量检索 + 提炼 + 重排）
+Stage 9   复杂任务怎么拆解执行？     → Plan & Execute + 反思
+Stage 10  怎么接入真实世界？         → 真实工具 + MCP
+Stage 11  怎么复用专家能力？         → Skill 系统
+Stage 12  一个 agent 怎么组织多个？  → 多 Agent 编排（Manager/Worker）
 ```
 
 ---

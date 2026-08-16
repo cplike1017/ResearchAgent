@@ -142,6 +142,16 @@ class Settings(BaseSettings):
     # GitHub Token（github MCP server 子进程注入用）
     github_token: str = ""
 
+    # ---------- Stage 12 多 Agent 编排 ----------
+    # 编排总开关（False 时 runtime 不注册 delegate 工具）
+    orchestrator_enabled: bool = True
+    # 编排规划策略: llm(模型分工) | stub(单步 generalist 兜底)
+    orchestrator_planner_strategy: str = "llm"
+    # 编排计划步骤数上限（防模型拆出几十步）
+    orchestrator_max_steps: int = 5
+    # 并行执行子 agent 的数量上限
+    orchestrator_max_parallel: int = 3
+
     # ---------- Skill 系统 ----------
     # 技能目录（skills/ 下每个子目录一个技能，含 SKILL.md）
     skills_dir: str = "./skills"
